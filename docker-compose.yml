@@ -1,0 +1,71 @@
+# Use version 3.8 for modern Docker features
+version: '3.8'
+
+# Define all the services (containers) for the application
+services:
+  # The PostgreSQL Database Service
+  db:
+    image: postgres:13-alpine
+    container_name: sabermetric_db
+    environment:
+      # These are the credentials for your database.
+      # For a real project, use a .env file for security.
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=baseball_db
+    ports:
+      # Expose the database on port 5432 so you can connect from your host machine if needed
+      - "5432:5432"
+    volumes:
+      # This named volume persists the database data even when the container is removed
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # The FastAPI Backend Service
+  backend:
+    build:
+      context: ./backend  # Look for the Dockerfile in the ./backend directory
+      dockerfile: Dockerfile
+    container_name: sabermetric_backend
+    ports:
+      # Map port 8000 on the host to port 8000 in the container
+      - "8000:8000"
+    volumes:
+      # Mount the local ./backend directory into the container's /app directory
+      # This allows for hot-reloading when you change your Python code
+      - ./backend:/app
+    environment:
+      # Pass the database credentials to the backend
+      - DATABASE_URL=${DATABASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=gpt-4o-mini
+      - PYTHONPATH=/app
+    # This command tells the container what to run on startup. THIS IS THE FIX.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      # This ensures that the 'db' service is started before the 'backend' service
+      - db
+    restart: unless-stopped
+
+  # The React Frontend Service
+  frontend:
+    build:
+      context: ./frontend # Look for the Dockerfile in the ./frontend directory
+      dockerfile: Dockerfile
+    container_name: sabermetric_frontend
+    ports:
+      # Map port 3000 on the host to port 3000 in the container
+      - "3000:3000"
+    volumes:
+      # Mount the local source code for hot-reloading
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    # stdin_open is often needed for Create React App's dev server
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+# Define the named volumes used by the services
+volumes:
+  postgres_data:
+

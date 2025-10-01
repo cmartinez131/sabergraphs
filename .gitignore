@@ -1,0 +1,60 @@
+# --- Secrets / env ---
+.env
+*.env
+*.env.*
+frontend/.env
+backend/.env
+.envrc
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+pip-wheel-metadata/
+dist/
+build/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- Node / React (applies recursively) ---
+node_modules/
+*.log
+npm-debug.log*
+yarn*.log
+pnpm-debug.log*
+# CRA/Vite/Next/etc. artifacts
+frontend/build/
+frontend/dist/
+frontend/.next/
+frontend/.cache/
+frontend/.vercel/
+
+# --- OS / Editors ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Docker / local overrides ---
+docker-compose.override.yml
+*.local
+
+# --- Data dumps & large CSVs ---
+data_pipeline/data/*.csv
+!data_pipeline/data/README.md  # keep a stub/readme if you want
+
+# --- Model artifacts (generated) ---
+backend/app/ml_models/*.json
+
+# --- Misc ---
+*.swp

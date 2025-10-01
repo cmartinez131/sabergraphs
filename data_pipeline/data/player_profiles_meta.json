@@ -1,0 +1,18 @@
+{
+  "columns": [
+    "player_id",
+    "full_name",
+    "birth_date",
+    "current_age",
+    "height_in",
+    "weight_lb",
+    "mlb_debut",
+    "bats",
+    "throws",
+    "primary_position",
+    "primary_position_name",
+    "is_active",
+    "raw_height"
+  ],
+  "count": 1980
+}
