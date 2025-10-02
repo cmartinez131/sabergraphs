@@ -8,22 +8,26 @@ from .api.prompt import router as prompt_router
 
 app = FastAPI(title="Sabermetric AI API")
 
-# CORS: configure via env for prod. Example:
-# CORS_ALLOW_ORIGINS="https://your-frontend.vercel.app,https://yourdomain.com"
-_raw = os.getenv("CORS_ALLOW_ORIGINS", "")
-_allow_origins = [o.strip() for o in _raw.split(",") if o.strip()]
-if not _allow_origins:
-    # Safe default for quick bring-up; tighten in production by setting CORS_ALLOW_ORIGINS
-    _allow_origins = ["*"]
+# ---- CORS ----
+raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+if raw:
+    allow_origins = [o.strip() for o in raw.split(",") if o.strip()]
+    allow_credentials = True
+else:
+    # Default for quick bring-up; tighten by setting CORS_ALLOW_ORIGINS in prod.
+    # NOTE: when using "*", credentials must be False by spec.
+    allow_origins = ["*"]
+    allow_credentials = False
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allow_origins,
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ---- Health ----
 @app.get("/")
 def root():
     return {"message": "Running (FastAPI)"}
@@ -32,6 +36,6 @@ def root():
 def health():
     return {"status": "ok"}
 
-# include routers
+# ---- Routers ----
 app.include_router(analytics_router)
 app.include_router(prompt_router)
