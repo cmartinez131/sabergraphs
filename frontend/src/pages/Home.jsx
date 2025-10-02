@@ -236,7 +236,7 @@ export default function Home() {
   }
 
   // Derived pill props
-  const backendLabel = backend.ok ? "Connected" : backend.text;
+  const backendLabel = backend.ok ? "Running" : backend.text;
   const backendState = backend.ok ? "ok" : backend.ok === false ? "error" : "warn";
 
   /* ---------- Exports ---------- */

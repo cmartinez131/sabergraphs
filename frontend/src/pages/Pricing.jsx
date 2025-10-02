@@ -55,8 +55,8 @@ export default function Pricing() {
       <main className="container pricing">
         {/* Hero */}
         <section className="pricing-hero">
-          <h1>Pricing Plans</h1>
-          <p className="muted">Start free. Upgrade for projections, conversational AI, and what-if analytics.</p>
+          <h1>Pricing (Work in Progress)</h1>
+          <p className="muted">Start free. Upgrade for projections, faster speed, and what-if analytics.</p>
 
           <div className="price-toggle glass" role="tablist" aria-label="Billing period">
             <button
@@ -82,32 +82,31 @@ export default function Pricing() {
 
         {/* Plans */}
         <section className="plan-grid">
-          {/* Free */}
+          {/* Free (logged-in) */}
           <article className="plan-card glass">
             <div className="plan-header">
               <h3>Free</h3>
-              <p className="plan-tag">For casual fans</p>
+              <p className="plan-tag">Try it out</p>
               <div className="plan-price">
                 <span className="price">$0</span>
                 <span className="per">/ month</span>
               </div>
             </div>
             <ul className="feature-list">
-              <li>✓ Basic player & team comparisons</li>
-              <li>✓ Watermarked chart exports</li>
-              <li>✓ 20 AI queries/month</li>
+              <li>✓ Logged-in access</li>
+              <li>✓ Player & team comparisons</li>
+              <li>✓ Clean charts (watermarked exports)</li>
+              <li>✓ 15 AI queries/day</li>
               <li>✓ Local chat history</li>
-              <li>— Conversational Memory</li>
-              <li>— Projections & Sims</li>
             </ul>
-            <button className="btn primary wide">Get Started</button>
+            <button className="btn primary wide">Get Free</button>
           </article>
 
           {/* Plus */}
           <article className="plan-card glass popular">
             <div className="plan-header">
               <h3>Plus</h3>
-              <p className="plan-tag">For fans & creators</p>
+              <p className="plan-tag">Fans & creators</p>
               <div className="plan-price">
                 <span className="price">{annual ? plus.perMonth : fmtMo(PLUS_MO)}</span>
                 <span className="per">{annual ? "billed annually" : "/ month"}</span>
@@ -115,23 +114,22 @@ export default function Pricing() {
               {annual && <div className="badge">{plus.billedText}</div>}
             </div>
             <ul className="feature-list">
-              <li>✓ Everything in Free, plus:</li>
-              <li>✓ Baseline Projections & Playoff Sims</li>
-              <li>✓ Conversational Memory (AI remembers context)</li>
-              <li>✓ Save & share dashboards</li>
-              <li>✓ No-watermark CSV/PNG exports</li>
-              <li>✓ AI-generated chart summaries</li>
-              <li>✓ Priority speed • Up to 500 AI credits/mo*</li>
+              <li>✓ Everything in Free</li>
+              <li>✓ Projections & playoff sims</li>
+              <li>✓ Save/share dashboards</li>
+              <li>✓ CSV/PNG exports (no watermark)</li>
+              <li>✓ AI chart summaries</li>
+              <li>✓ Priority speed • ~200–400 queries/mo*</li>
             </ul>
-            <button className="btn primary wide">Start Plus Trial</button>
-            <p className="tiny muted">*Credits used for queries & projections.</p>
+            <button className="btn primary wide">Get Plus</button>
+            <p className="tiny muted">*Fair-use policy with gentle rate limits.</p>
           </article>
 
           {/* Pro */}
           <article className="plan-card glass">
             <div className="plan-header">
               <h3>Pro</h3>
-              <p className="plan-tag">For analysts & power users</p>
+              <p className="plan-tag">Analysts & power users</p>
               <div className="plan-price">
                 <span className="price">{annual ? pro.perMonth : fmtMo(PRO_MO)}</span>
                 <span className="per">{annual ? "billed annually" : "/ month"}</span>
@@ -139,37 +137,33 @@ export default function Pricing() {
               {annual && <div className="badge">{pro.billedText}</div>}
             </div>
             <ul className="feature-list">
-              <li>✓ Everything in Plus, plus:</li>
-              <li>✓ Advanced 'What-if' Scenario Engine</li>
-              <li>✓ Access to Advanced Projection Models</li>
-              <li>✓ Bulk Comparisons & Batch Exports</li>
-              <li>✓ Player & Team Performance Alerts</li>
-              <li>✓ Standard API Access (Rate-limited)</li>
-              <li>✓ Fastest speed • Up to 2000 AI credits/mo*</li>
+              <li>✓ Everything in Plus</li>
+              <li>✓ What-if scenarios (natural-language or sliders)</li>
+              <li>✓ Bulk comparisons & batch exports</li>
+              <li>✓ Player/team alerts</li>
+              <li>✓ API preview tokens</li>
+              <li>✓ Fastest speed • higher limits</li>
             </ul>
-            <button className="btn primary wide">Go Pro</button>
-            <p className="tiny muted">*Credits used for all features.</p>
+            <button className="btn primary wide">Get Pro</button>
           </article>
         </section>
 
         {/* Compare table (kept compact) */}
         <section className="compare glass">
-          <h4>Compare Features</h4>
+          <h4>Compare features</h4>
           <div className="compare-grid">
             <span></span><span>Free</span><span>Plus</span><span>Pro</span>
 
-            <span>AI Queries/Credits</span><span>20/mo</span><span>~500 credits/mo*</span><span>~2000 credits/mo*</span>
-            <span>Conversational AI</span><span>—</span><span>✓</span><span>✓</span>
-            <span>Baseline Projections</span><span>—</span><span>✓</span><span>✓</span>
-            <span>Advanced Models</span><span>—</span><span>—</span><span>✓</span>
-            <span>What-if Scenarios</span><span>—</span><span>—</span><span>Advanced</span>
-            <span>Save/Share Dashboards</span><span>—</span><span>✓</span><span>✓</span>
+            <span>AI queries</span><span>15/day</span><span>~200–400/mo*</span><span>Soft-unlimited*</span>
+            <span>Projections & sims</span><span>—</span><span>✓</span><span>✓</span>
+            <span>What-if scenarios</span><span>—</span><span>Basic (roadmap)</span><span>Advanced</span>
+            <span>Save/share dashboards</span><span>—</span><span>✓</span><span>✓</span>
             <span>Exports</span><span>Watermark</span><span>CSV/PNG</span><span>Batch CSV/PNG</span>
+            <span>Speed</span><span>Queued</span><span>Priority</span><span>Fastest</span>
             <span>Alerts</span><span>—</span><span>—</span><span>✓</span>
-            <span>API Access</span><span>—</span><span>—</span><span>Standard</span>
-            <span>Speed</span><span>Standard</span><span>Priority</span><span>Fastest</span>
+            <span>API access</span><span>—</span><span>—</span><span>Preview</span>
           </div>
-          <p className="tiny muted">*A fair-use policy applies. Simple queries use fewer credits than complex scenarios.</p>
+          <p className="tiny muted">*Fair-use limits and abuse guardrails apply.</p>
         </section>
       </main>
     </div>
