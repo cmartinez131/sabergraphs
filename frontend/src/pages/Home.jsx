@@ -1,3 +1,4 @@
+// frontend/src/pages/Home.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toPng } from "html-to-image";
@@ -32,7 +33,9 @@ function genLine() {
 }
 
 export default function Home() {
-  const [backendMessage, setBackendMessage] = useState("");
+  // --- Backend status now tracks ok/text explicitly ---
+  const [backend, setBackend] = useState({ ok: null, text: "Connecting..." });
+
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [hasChart, setHasChart] = useState(false);
@@ -62,11 +65,29 @@ export default function Home() {
     []
   );
 
-  // Health check
+  // ---------- Health check ----------
   useEffect(() => {
+    let cancelled = false;
     apiHealth()
-      .then((d) => setBackendMessage(d.message))
-      .catch(() => setBackendMessage("Could not connect to backend."));
+      .then((d) => {
+        if (cancelled) return;
+        // Accept either /health → {status:"ok"} or root → {message:"Running (FastAPI)"}
+        const msg = d?.message || "";
+        const ok =
+          d?.status === "ok" ||
+          /running|ready|hello|ok/i.test(msg);
+        setBackend({
+          ok,
+          text: ok ? "Running" : (msg || "Connecting..."),
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setBackend({ ok: false, text: "Could not connect to backend." });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Follow OS theme changes if user hasn't manually chosen
@@ -214,9 +235,9 @@ export default function Home() {
     if (target) target.focus();
   }
 
-  const backendOk =
-    typeof backendMessage === "string" && /hello|ok|ready|running/i.test(backendMessage);
-  const backendLabel = backendOk ? "Running (FastAPI)" : (backendMessage || "Connecting...");
+  // Derived pill props
+  const backendLabel = backend.ok ? "Connected" : backend.text;
+  const backendState = backend.ok ? "ok" : backend.ok === false ? "error" : "warn";
 
   /* ---------- Exports ---------- */
   async function exportPNG() {
@@ -312,10 +333,7 @@ export default function Home() {
                   <div className="row"><span>Frontend</span><StatusPill label="Running" state="ok" /></div>
                   <div className="row">
                     <span>Backend</span>
-                    <StatusPill
-                      label={backendLabel}
-                      state={backendOk ? "ok" : backendMessage ? "error" : "warn"}
-                    />
+                    <StatusPill label={backendLabel} state={backendState} />
                   </div>
                   <div className="row"><span>Database</span><StatusPill label="Running" state="ok" /></div>
                   <p className="muted" style={{ marginTop: 8 }}>*Only 2015-2025 batter data available</p>
@@ -332,7 +350,7 @@ export default function Home() {
                 onChange={(e) => setQuery(e.target.value)}
                 aria-label="Ask Sabermetric AI"
               />
-            <button className="btn primary" type="submit">Ask AI</button>
+              <button className="btn primary" type="submit">Ask AI</button>
             </form>
 
             {/* Grouped example chips */}
