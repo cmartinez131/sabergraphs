@@ -1,8 +1,8 @@
-// src/hooks/api.js
-// Frontend → Backend HTTP helpers
-// Uses REACT_APP_API_URL at build time. Fallbacks:
-// - On localhost → http://localhost:8000 (dev)
-// - On any non-localhost origin → https://sabermetric-ai.onrender.com (prod safety)
+// frontend/src/hooks/api.js
+// Frontend → Backend HTTP helpers (Create React App)
+// Reads REACT_APP_API_URL at build time. Fallbacks:
+// - localhost → http://localhost:8000
+// - non-localhost → https://sabermetric-ai.onrender.com
 
 const DEFAULT_DEV_API = "http://localhost:8000";
 const DEFAULT_PROD_API = "https://sabermetric-ai.onrender.com";
@@ -11,27 +11,23 @@ function normalize(url) {
   return (url || "").trim().replace(/\/+$/, "");
 }
 
+// IMPORTANT: use the exact pattern so CRA inlines the value at build time.
+const ENV_API = normalize(process.env.REACT_APP_API_URL || "");
+
 function detectBase() {
-  // 1) Build-time env (Vercel/CRA)
-  const fromEnv = normalize(process?.env?.REACT_APP_API_URL);
+  if (ENV_API) return ENV_API;
 
-  if (fromEnv) return fromEnv;
-
-  // 2) Runtime safety: if we're not on localhost, never call localhost
   if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    const isLocal =
-      host === "localhost" || host === "127.0.0.1" || host === "::1";
+    const h = window.location.hostname;
+    const isLocal = h === "localhost" || h === "127.0.0.1" || h === "::1";
     return isLocal ? DEFAULT_DEV_API : DEFAULT_PROD_API;
   }
-
-  // 3) Very last resort (SSR or unknown)
   return DEFAULT_PROD_API;
 }
 
-export const API_BASE = detectBase();
+export const API_BASE = normalize(detectBase());
 
-// Expose for quick sanity checks in DevTools: window.API_BASE
+// Expose for quick sanity checks in DevTools
 if (typeof window !== "undefined") {
   window.API_BASE = API_BASE;
 }
@@ -50,7 +46,8 @@ async function httpGet(path) {
 
 async function httpPost(path, body) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000); // 30s safety timeout
+  // Cold starts on free tiers can be slow; give it some headroom.
+  const timer = setTimeout(() => controller.abort(), 60000);
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
@@ -73,7 +70,8 @@ async function httpPost(path, body) {
 
 // Public API
 export function health() {
-  return httpGet(`/`);
+  // Your backend exposes /health
+  return httpGet(`/health`);
 }
 export function compare(body) {
   return httpPost(`/api/compare`, body);
