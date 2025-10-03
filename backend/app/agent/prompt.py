@@ -450,8 +450,29 @@ def parse_horizon(text: str):
     return None
 
 def wants_projection(text: str) -> bool:
-    t = (text or "").lower()
-    return any(kw in t for kw in ("project", "predict", "forecast", "next season", "next year", "next years", "in ", "over the next"))
+    """
+    Determine if the user is asking for a projection/forecast.
+
+    Fix: do NOT trigger just because the text contains 'in '.
+    Only consider 'in' a forecast signal when it appears as 'in <N> year(s)'.
+    """
+    t = " ".join((text or "").lower().split())
+
+    # Strong triggers
+    if any(kw in t for kw in (
+        "project", "predict", "forecast",
+        "next season", "next year",
+        "over the next", "for the next"
+    )):
+        return True
+
+    # Gentle trigger: "in <N> year(s)" only (avoid matching "in 2024")
+    words = t.split()
+    for i in range(len(words) - 2):
+        if words[i] == "in" and words[i + 1].isdigit() and words[i + 2] in ("year", "years"):
+            return True
+
+    return False
 
 def default_current_season() -> int:
     return datetime.now().year

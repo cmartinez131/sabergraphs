@@ -33,9 +33,7 @@ function genLine() {
 }
 
 export default function Home() {
-  // --- Backend status now tracks ok/text explicitly ---
   const [backend, setBackend] = useState({ ok: null, text: "Connecting..." });
-
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [hasChart, setHasChart] = useState(false);
@@ -71,23 +69,15 @@ export default function Home() {
     apiHealth()
       .then((d) => {
         if (cancelled) return;
-        // Accept either /health → {status:"ok"} or root → {message:"Running (FastAPI)"}
         const msg = d?.message || "";
-        const ok =
-          d?.status === "ok" ||
-          /running|ready|hello|ok/i.test(msg);
-        setBackend({
-          ok,
-          text: ok ? "Running" : (msg || "Connecting..."),
-        });
+        const ok = d?.status === "ok" || /running|ready|hello|ok/i.test(msg);
+        setBackend({ ok, text: ok ? "Running" : (msg || "Connecting...") });
       })
       .catch(() => {
         if (cancelled) return;
         setBackend({ ok: false, text: "Could not connect to backend." });
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   // Follow OS theme changes if user hasn't manually chosen
@@ -109,7 +99,6 @@ export default function Home() {
     }
   }, []);
 
-  /* ---------- Example prompt chips ---------- */
   const promptGroups = useMemo(
     () => ({
       "Compare players": [
@@ -145,7 +134,6 @@ export default function Home() {
     []
   );
 
-  /* ---------- Theme toggle ---------- */
   function toggleTheme() {
     const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
     document.documentElement.dataset.theme = next;
@@ -153,7 +141,6 @@ export default function Home() {
     setTheme(next);
   }
 
-  /* ---------- Demo ---------- */
   function runDemo() {
     setLoading(true);
     setHasChart(false);
@@ -216,7 +203,6 @@ export default function Home() {
     callPrompt(q);
   }
 
-  /* ---------- Reset to starter screen (called by brand click) ---------- */
   function resetUI() {
     setLoading(false);
     setHasChart(false);
@@ -235,24 +221,42 @@ export default function Home() {
     if (target) target.focus();
   }
 
-  // Derived pill props
   const backendLabel = backend.ok ? "Running" : backend.text;
   const backendState = backend.ok ? "ok" : backend.ok === false ? "error" : "warn";
 
   /* ---------- Exports ---------- */
   async function exportPNG() {
     if (!chartNodeRef.current) return;
-    const el = chartNodeRef.current;
+
+    // Snap only the chart canvas (no outer padding/border)
+    const chartEl =
+      chartNodeRef.current.querySelector(".chart-box") || chartNodeRef.current;
+
+    // lock a consistent canvas size for export (16:9)
+    const SNAP_W = 1200;
+    const SNAP_H = 675;
+
     try {
-      el.classList.add("export-snapshot");
-      const dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: "#ffffff", cacheBust: true });
+      // Strip ornamental spacing and force exact canvas size
+      chartEl.classList.add("exporting");
+
+      const dataUrl = await toPng(chartEl, {
+        width: SNAP_W,
+        height: SNAP_H,
+        pixelRatio: 2, // retina
+        backgroundColor: "#ffffff",
+        cacheBust: true,
+        // ensure html-to-image renders the same box it captures
+        style: { width: `${SNAP_W}px`, height: `${SNAP_H}px` },
+      });
+
       const base = sanitizeFileName(meta?.title || "sabermetric_ai_chart");
       downloadURL(dataUrl, `${base}.png`);
     } catch (e) {
       console.error("PNG export failed", e);
       alert("PNG export failed (see console).");
     } finally {
-      el.classList.remove("export-snapshot");
+      chartEl.classList.remove("exporting");
     }
   }
 
@@ -314,7 +318,6 @@ export default function Home() {
             <p className="sub">Natural language → analytics, projections, and beautiful charts.</p>
 
             <div className="status-row">
-              {/* LEFT: tips/instructions */}
               <div className="status-card glass">
                 <h2>Getting started</h2>
                 <ul className="bullets">
@@ -326,7 +329,6 @@ export default function Home() {
                 </ul>
               </div>
 
-              {/* RIGHT: service status */}
               <div className="status-card glass">
                 <h2>Service Status</h2>
                 <div className="rows">
@@ -353,7 +355,6 @@ export default function Home() {
               <button className="btn primary" type="submit">Ask AI</button>
             </form>
 
-            {/* Grouped example chips */}
             <div className="chip-groups">
               {Object.entries(promptGroups).map(([group, prompts]) => (
                 <div key={group} className="chip-group">

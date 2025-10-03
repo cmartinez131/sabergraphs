@@ -13,6 +13,11 @@ import {
   labelizeId,
 } from "../../utils/labels";
 
+const BRAND_COLORS = [
+  "#2ac9d9", "#7c6cff", "#ffd166", "#33d69f", "#ff6b6b",
+  "#4895ef", "#80ed99", "#a78bfa", "#ef8354", "#06d6a0"
+];
+
 function Shell({ title, children }) {
   return (
     <div className="chart-surface">
@@ -39,7 +44,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
     return null;
   }
 
-  // Radar
+  // ---------------- Radar ----------------
   if (chartType === "radar") {
     const data = Array.isArray(series) ? series : [];
     const prettyData = data.map((row) => {
@@ -63,17 +68,17 @@ export default function ChartRenderer({ chartType, series, meta }) {
           gridLevels={5}
           dotSize={3}
           dotBorderWidth={1}
-          colors={{ scheme: "category10" }}
+          colors={BRAND_COLORS}
           animate
           motionConfig="gentle"
-          legends={[{ anchor: "bottom", direction: "row", translateY: 40, itemWidth: 100, itemHeight: 16, symbolSize: 10, symbolShape: "circle" }]}
+          legends={[{ anchor: "top-right", direction: "column", translateY: 40, itemWidth: 100, itemHeight: 16, symbolSize: 10, symbolShape: "circle" }]}
           valueFormat={(v) => fmtNumber(v)}
         />
       </Shell>
     );
   }
 
-  // Bar
+  // ---------------- Bar ----------------
   if (chartType === "bar") {
     const prettySeries = (series || []).map((s) => ({ ...s, id: labelizeId(s.id, labelMap) }));
     const { rows: rawRows, keys } = buildBar(prettySeries);
@@ -88,6 +93,15 @@ export default function ChartRenderer({ chartType, series, meta }) {
         ? "Player"
         : "Category";
 
+    const tickRotation = rows && rows.length > 8 ? -25 : 0;
+
+    // Allocate explicit room for the legend *below* the x-axis text
+    const LEGEND_H = 22;      // legend block height
+    const GAP = 12;           // gap between axis label and legend
+    const AXIS_LABEL = 42;    // axisBottom.legendOffset
+    const TICKS_AREA = tickRotation < 0 ? 34 : 24;
+    const bottomMargin = AXIS_LABEL + TICKS_AREA + LEGEND_H + GAP; // ~100–110px
+
     return (
       <Shell title={deriveTitle()}>
         <ResponsiveBar
@@ -95,16 +109,45 @@ export default function ChartRenderer({ chartType, series, meta }) {
           keys={keys.length ? keys : [prettySeries?.[0]?.id || "value"]}
           indexBy="x"
           groupMode={groupMode}
-          margin={{ top: 20, right: 28, bottom: 70, left: 56 }}
+          margin={{ top: 20, right: 28, bottom: bottomMargin, left: 56 }}
           padding={0.3}
           theme={nivoTheme}
           enableGridY
+          enableGridX
           valueFormat={(v) => fmtNumber(v)}
-          axisBottom={{ tickSize: 0, tickPadding: 10, legend: xLegend, legendOffset: 42, legendPosition: "middle" }}
-          axisLeft={{ tickSize: 0, tickPadding: 6, legend: yLegend, legendOffset: -46, legendPosition: "middle" }}
+          axisBottom={{
+            tickSize: 0,
+            tickPadding: 10,
+            tickRotation,
+            legend: xLegend,
+            legendOffset: AXIS_LABEL,
+            legendPosition: "middle",
+          }}
+          axisLeft={{
+            tickSize: 0,
+            tickPadding: 6,
+            legend: yLegend,
+            legendOffset: -46,
+            legendPosition: "middle",
+          }}
           labelSkipHeight={14}
+          labelSkipWidth={14}
           labelTextColor="var(--text)"
-          legends={[{ dataFrom: "keys", anchor: "top-right", direction: "column", translateX: 12, itemWidth: 120, itemHeight: 20, symbolSize: 10, symbolShape: "circle" }]}
+          colors={BRAND_COLORS}
+          borderColor={{ from: "color", modifiers: [["darker", 1.4]] }}
+          legends={[
+            {
+              dataFrom: "keys",
+              anchor: "top-right",
+              direction: "row",
+              // push the legend down into the extra bottom margin
+              translateY: bottomMargin - (LEGEND_H + Math.max(GAP - 4, 6)),
+              itemWidth: 110,
+              itemHeight: LEGEND_H,
+              symbolSize: 10,
+              symbolShape: "circle",
+            },
+          ]}
           tooltip={({ id, value, indexValue }) => (
             <div style={{ padding: 6 }}>
               <strong>{String(id)}</strong> — {String(indexValue)}
@@ -116,7 +159,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
     );
   }
 
-  // Line
+  // ---------------- Line ----------------
   const categorical = isCategorical(series);
   const seriesForLine = categorical
     ? (series || []).map((s) => ({ ...s, id: labelizeId(s.id, labelMap) }))
@@ -152,12 +195,19 @@ export default function ChartRenderer({ chartType, series, meta }) {
     }
   }
 
+  // extra bottom space for legend under the x-axis label
+  const LINE_AXIS_LABEL = 44;
+  const LINE_TICKS_AREA = 26;
+  const LINE_LEGEND_H = 22;
+  const LINE_GAP = 12;
+  const lineBottom = LINE_AXIS_LABEL + LINE_TICKS_AREA + LINE_LEGEND_H + LINE_GAP; // ~104px
+
   return (
     <Shell title={deriveTitle()}>
       <ResponsiveLine
         data={seriesForLine}
         theme={nivoTheme}
-        margin={{ top: 20, right: 28, bottom: 70, left: 56 }}
+        margin={{ top: 20, right: 28, bottom: lineBottom, left: 56 }}
         xScale={categorical ? { type: "point" } : { type: "linear", min: minX, max: maxX }}
         yScale={{ type: "linear", min: "auto", max: "auto" }}
         curve="monotoneX"
@@ -165,18 +215,38 @@ export default function ChartRenderer({ chartType, series, meta }) {
         pointSize={7}
         enableArea
         areaOpacity={0.25}
-        colors={{ scheme: "category10" }}
+        colors={BRAND_COLORS}
+        enableGridX
+        enableGridY
         axisBottom={{
           tickSize: 0,
           tickPadding: 10,
           tickValues,
           format: (v) => (typeof v === "number" ? String(v) : v),
           legend: categorical ? "Category" : "Season",
-          legendOffset: 44,
+          legendOffset: LINE_AXIS_LABEL,
           legendPosition: "middle",
         }}
-        axisLeft={{ tickSize: 0, tickPadding: 6, legend: "Value", legendOffset: -46, legendPosition: "middle" }}
-        legends={[{ dataFrom: "series", anchor: "top-right", direction: "column", translateX: 12, itemWidth: 160, itemHeight: 16, symbolSize: 10, symbolShape: "circle", toggleSerie: true }]}
+        axisLeft={{
+          tickSize: 0,
+          tickPadding: 6,
+          legend: yLegend,
+          legendOffset: -46,
+          legendPosition: "middle",
+        }}
+        legends={[
+          {
+            dataFrom: "series",
+            anchor: "top-right",
+            direction: "column",
+            translateY: lineBottom - (LINE_LEGEND_H + Math.max(LINE_GAP - 4, 6)),
+            itemWidth: 140,
+            itemHeight: LINE_LEGEND_H,
+            symbolSize: 10,
+            symbolShape: "circle",
+            toggleSerie: true,
+          },
+        ]}
         useMesh
         motionConfig="gentle"
         tooltip={({ point }) => {

@@ -1,3 +1,4 @@
+// frontend/src/components/layout/NavBar.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -63,6 +64,14 @@ export default function NavBar({
       </div>
 
       <div className="nav-actions">
+        {/* NEW: visible Product Spec button (placed to the left of Log in) */}
+        <Link className="btn ghost small" to="/product-spec" title="Read the product spec">
+          Product spec
+        </Link>
+        <Link className="btn ghost small" to="/about-me" title="Read about me page">
+          About me
+        </Link>
+
         <button className="btn light small" type="button">Log in</button>
         <button className="btn primary small" type="button">Sign up for free</button>
 
@@ -87,7 +96,8 @@ export default function NavBar({
               <Link className="menu-item" role="menuitem" to="/pricing" onClick={() => setHelpOpen(false)}>
                 See plans & pricing
               </Link>
-              <button className="menu-item" role="menuitem" type="button">Settings</button>
+
+              {/* REMOVED: Settings button */}
 
               {onToggleTheme && (
                 <button
@@ -105,6 +115,7 @@ export default function NavBar({
 
               <div className="menu-divider" />
 
+              {/* Keeping Product Spec & About Me in the menu as secondary paths */}
               <Link className="menu-item" role="menuitem" to="/product-spec" onClick={() => setHelpOpen(false)}>
                 Product Spec
               </Link>

@@ -250,7 +250,7 @@ body {
 .chart-box { height: min(60vh, 520px); border: 1px dashed var(--stroke); border-radius: var(--radius); background: rgba(255,255,255,0.035); padding: 6px; transition: box-shadow .25s ease, border-color .25s ease; }
 .chart-box:hover { border-color: rgba(124,243,255,0.32); box-shadow: 0 16px 44px rgba(121,246,255,0.10) inset; }
 
-/* ===== New: cohesive chart title styling (used for both main + facets) ===== */
+/* ===== Cohesive chart title styling (used for both main + facets) ===== */
 .chart-surface { display: flex; flex-direction: column; gap: 8px; }
 .facet-title {
   margin: 2px 2px 8px;
@@ -296,13 +296,11 @@ body {
   align-items:flex-end;
 }
 
-
 /* On small screens, put buttons on one row to save vertical space */
 @media (max-width: 720px){
   .summary-row{ grid-template-columns: 1fr; }
   .export-actions{ flex-direction:row; justify-content:flex-end; }
 }
-
 
 /* Skeleton */
 .chart-skeleton { --bar-w: 9%; position: relative; display: grid; grid-template-columns: repeat(8, 1fr); align-items: end; gap: 10px; height: 300px; padding: 10px 6px 6px; border: 1px dashed var(--stroke); border-radius: var(--radius); background: rgba(255,255,255,0.03); overflow: hidden; }
@@ -318,6 +316,9 @@ body {
   padding: 10px; border-radius: var(--radius);
   background: var(--glass); border: 1px solid var(--stroke);
   backdrop-filter: blur(var(--blur)); box-shadow: var(--shadow);
+
+  /* keep the composer above any chart content */
+  z-index: 6;
 }
 .composer .btn { height: 56px; }
 
@@ -464,11 +465,30 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, .chip:focu
   }
 }
 
-/* Bright, print-friendly snapshot (used only during PNG export) */
+/* =================================================================
+   Bright, print-friendly snapshot (used only during PNG export)
+   ================================================================= */
 .export-snapshot {
   --bg-1: #ffffff;
   --text: #0d1220;
   --muted: #5a6785;
   --stroke: #d0d6ea;  /* darker stroke so grid & axes are visible in exports */
   --tooltip-bg: #ffffff;
+
+  /* lock rendering size so exports are consistent regardless of viewport */
+  --export-w: 1200px;
+  --export-h: 675px; /* 16:9 */
+
+  /* shrink wrapper to its contents so html-to-image captures just the chart */
+  display: inline-block !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  background: #ffffff !important;
 }
+.export-snapshot .chart-box{
+  width: var(--export-w) !important;
+  height: var(--export-h) !important;
+}
+
