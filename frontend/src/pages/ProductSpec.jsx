@@ -75,7 +75,7 @@ export default function ProductSpec() {
                         <li><b>DevOps</b>: Docker and Docker Compose</li>
                     </ul>
 
-                    <h3>Core user stories</h3>
+                    <h3>Core Features</h3>
                     <ul className="feature-list">
                         <li>Enter a query across seasons</li>
                         <li>Ask for stat distributions (e.g., histogram of HRs in 2023).</li>
@@ -153,22 +153,10 @@ export default function ProductSpec() {
                         </li>
                     </ul>
 
-
-                    <h3>What If engine plan</h3>
-                    <ul className="feature-list">
-                        <li>
-                            Parametric projection model that exposes inputs like K percent, BB percent, ISO.
-                        </li>
-                        <li>
-                            Scenario parser maps phrases like improves plate discipline to BB percent and K percent deltas.
-                        </li>
-                        <li>
-                            Return Baseline and Scenario series with narration that explains the difference.
-                        </li>
-                    </ul>
-
                     <h3>Next steps</h3>
                     <ul className="feature-list">
+                        <li>Add more predictions models.</li>
+                        <li>Extend stat coverage for more complex queries.</li>
                         <li>Wire what if sliders to the agent and simulation engine.</li>
                         <li>Saved dashboards and shareable links.</li>
                         <li>Glossary and stat coverage expansion for pitching and defense.</li>
