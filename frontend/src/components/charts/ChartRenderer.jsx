@@ -71,7 +71,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
           colors={BRAND_COLORS}
           animate
           motionConfig="gentle"
-          legends={[{ anchor: "top-right", direction: "column", translateY: 40, itemWidth: 100, itemHeight: 16, symbolSize: 10, symbolShape: "circle" }]}
+          legends={[{ anchor: "bottom", direction: "row", translateY: 40, itemWidth: 100, itemHeight: 16, symbolSize: 10, symbolShape: "circle" }]}
           valueFormat={(v) => fmtNumber(v)}
         />
       </Shell>
@@ -138,7 +138,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
           legends={[
             {
               dataFrom: "keys",
-              anchor: "top-right",
+              anchor: "bottom",
               direction: "row",
               // push the legend down into the extra bottom margin
               translateY: bottomMargin - (LEGEND_H + Math.max(GAP - 4, 6)),
@@ -237,8 +237,8 @@ export default function ChartRenderer({ chartType, series, meta }) {
         legends={[
           {
             dataFrom: "series",
-            anchor: "top-right",
-            direction: "column",
+            anchor: "bottom",
+            direction: "row",
             translateY: lineBottom - (LINE_LEGEND_H + Math.max(LINE_GAP - 4, 6)),
             itemWidth: 140,
             itemHeight: LINE_LEGEND_H,
