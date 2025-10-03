@@ -27,6 +27,17 @@ STAT_LABELS = {
     "b_rbi": "RBIs",  # important for RBI legend/labels
 }
 
+# ---- Rate stats that should apply MLB qualification (3.1 PA per scheduled game) ----
+RATE_QUAL_STATS = {
+    "batting_avg",
+    "on_base_percent",
+    "slg_percent",
+    "on_base_plus_slg",
+    "woba",
+    "isolated_power",
+    # You can extend this set if you want other percentage/ratio stats qualified by PA.
+}
+
 
 def stat_label(slug: str) -> str:
     if not isinstance(slug, str) or not slug:
@@ -87,6 +98,56 @@ def col_exists(db, name):
 
 def latest_year(db):
     return db.query(func.max(BattingStats.year)).scalar() or 2025
+
+
+# ---------- PA column + MLB qualification helpers ----------
+
+def _pa_column_name(db) -> str or None:
+    """
+    Return the actual PA column name that exists in the DB: prefer 'plate_appearances',
+    fall back to 'pa'. Return None if neither exists.
+    """
+    cols = table_columns(db)
+    if "plate_appearances" in cols:
+        return "plate_appearances"
+    if "pa" in cols:
+        return "pa"
+    # In case reflection is unavailable for some reason, fall back to model attr check.
+    if getattr(BattingStats, "plate_appearances", None) is not None:
+        return "plate_appearances"
+    return None
+
+
+# Scheduled MLB games by season (used for qualification threshold).
+# Your dataset is 2015–2025; the only atypical season here is 2020 (60 games).
+_GAMES_BY_YEAR = {
+    2020: 60,
+}
+_DEFAULT_SCHEDULED_GAMES = 162  # modern MLB regular seasons
+
+
+def _scheduled_games(year: int) -> int:
+    return int(_GAMES_BY_YEAR.get(int(year), _DEFAULT_SCHEDULED_GAMES))
+
+
+def _qualified_pa_threshold(year: int) -> int:
+    """
+    MLB qualifier for batting rate stat titles: 3.1 PA per scheduled game,
+    rounded to the nearest whole PA (nearest integer).
+    e.g. 162g -> round(3.1*162) = 502; 60g (2020) -> 186.
+    """
+    games = _scheduled_games(year)
+    return int(round(3.1 * games))
+
+
+def _auto_min_pa_if_rate_stat(stat: str, year: int, min_pa: int or None) -> int or None:
+    """
+    If stat is a rate stat AND caller did not specify min_pa, return the MLB-qualified threshold.
+    Otherwise, return the provided min_pa unchanged.
+    """
+    if min_pa is None and stat in RATE_QUAL_STATS and year is not None:
+        return _qualified_pa_threshold(int(year))
+    return min_pa
 
 
 # ---------- helper: name/id lookups ----------
@@ -190,15 +251,35 @@ def leaderboard(db, stat, year=None, limit=10, min_pa=None, order="desc"):
     col = resolve_stat_column(db, stat)
     year = year or latest_year(db)
 
+    # Auto-qualify PA if this is a rate stat and min_pa not provided
+    effective_min_pa = _auto_min_pa_if_rate_stat(stat, year, min_pa)
+    pa_name = _pa_column_name(db)
+    pa_col = resolve_stat_column(db, pa_name) if (pa_name and effective_min_pa) else None
+
     q = db.query(BattingStats.player_id, BattingStats.full_name, col.label("v")).filter(BattingStats.year == year)
-    if min_pa and col_exists(db, "plate_appearances"):
-        q = q.filter(resolve_stat_column(db, "plate_appearances") >= int(min_pa))
+    if pa_col is not None:
+        q = q.filter(pa_col >= int(effective_min_pa))
 
     q = q.order_by(desc("v") if str(order).lower() != "asc" else asc("v")).limit(int(limit))
     rows = q.all()
     data = [{"x": name, "y": float(v)} for _pid, name, v in rows if v is not None]
+
     dir_label = "Top" if str(order).lower() != "asc" else "Bottom"
-    meta = {"title": f"{dir_label} {int(limit)} {stat_label(stat)} — {year}", "label_map": label_map_for([stat])}
+    title = f"{dir_label} {int(limit)} {stat_label(stat)} — {year}"
+    meta = {"title": title, "label_map": label_map_for([stat])}
+
+    if pa_col is not None and effective_min_pa:
+        meta["title"] = title + " (qualified)"
+        meta["qualifier"] = {
+            "min_pa": int(effective_min_pa),
+            "rule": "MLB 3.1 PA per scheduled game (Rule 9.22)",
+            "scheduled_games": _scheduled_games(year),
+            "pa_column": pa_name,
+        }
+    elif stat in RATE_QUAL_STATS and effective_min_pa and pa_col is None:
+        # We wanted to qualify but couldn't find a PA column; add a soft warning
+        meta["warnings"] = [{"type": "missing_pa_column", "wanted_min_pa": int(effective_min_pa)}]
+
     return {"chart_type": "bar", "series": [{"id": stat, "data": data}], "meta": meta}
 
 
@@ -208,9 +289,13 @@ def leaderboard_range(db, stat, start_year, end_year, limit=10, agg="sum", order
     col = resolve_stat_column(db, stat)
     start_year, end_year = int(start_year), int(end_year)
 
+    # We do NOT auto-apply MLB qualification across ranges by default,
+    # because official qualifiers are per-season. Honor caller-supplied min_pa if provided.
+    pa_name = _pa_column_name(db)
+    pa_sum = func.sum(resolve_stat_column(db, pa_name)) if (pa_name and min_pa) else None
+
     agg_sum = func.sum(col).label("sum_v")
     agg_avg = func.avg(col).label("avg_v")
-    pa_sum = func.sum(resolve_stat_column(db, "plate_appearances")) if col_exists(db, "plate_appearances") else None
 
     q = (
         db.query(
@@ -232,7 +317,6 @@ def leaderboard_range(db, stat, start_year, end_year, limit=10, agg="sum", order
 
     rows = q.all()
 
-    # ----- FIX: explicit loop (Option B) -----
     data = []
     for r in rows:
         val = getattr(r, use_col)
@@ -246,8 +330,9 @@ def leaderboard_range(db, stat, start_year, end_year, limit=10, agg="sum", order
         "label_map": label_map_for([stat]),
         "range": {"start_year": start_year, "end_year": end_year, "agg": agg_label},
     }
-    series_id = f"{stat} ({agg_label})"
-    return {"chart_type": "bar", "series": [{"id": series_id, "data": data}], "meta": meta}
+    if min_pa and pa_sum is not None:
+        meta["qualifier"] = {"min_pa_total": int(min_pa), "pa_column": pa_name, "applied_on": "sum(PA) over range"}
+    return {"chart_type": "bar", "series": [{"id": f"{stat} ({agg_label})", "data": data}], "meta": meta}
 
 # ----------------- 1c) leaderboard by year (facet of bars) -----------------
 
@@ -255,6 +340,9 @@ def leaderboard_by_year(db, stat, start_year, end_year, limit=10, order="desc", 
     """
     For each year in [start_year, end_year], return the top/bottom N players by `stat`
     for that single season. Returns a facet of bar charts (one facet per year).
+
+    If `min_pa` is not provided and `stat` is a rate stat, we auto-apply the MLB
+    per-season qualifier (3.1 * scheduled_games_for_that_year), per year.
     """
     col = resolve_stat_column(db, stat)
     start_year, end_year = int(start_year), int(end_year)
@@ -264,19 +352,38 @@ def leaderboard_by_year(db, stat, start_year, end_year, limit=10, order="desc", 
     dir_label = "Top" if str(order).lower() != "asc" else "Bottom"
     label_map = label_map_for([stat])
 
+    pa_name = _pa_column_name(db)
+
     for y in years:
+        eff_min_pa = _auto_min_pa_if_rate_stat(stat, y, min_pa)
+        pa_col = resolve_stat_column(db, pa_name) if (pa_name and eff_min_pa) else None
+
         q = db.query(BattingStats.player_id, BattingStats.full_name, col.label("v")).filter(BattingStats.year == y)
-        if min_pa and col_exists(db, "plate_appearances"):
-            q = q.filter(resolve_stat_column(db, "plate_appearances") >= int(min_pa))
+        if pa_col is not None:
+            q = q.filter(pa_col >= int(eff_min_pa))
         q = q.order_by(desc("v") if str(order).lower() != "asc" else asc("v")).limit(int(limit))
         rows = q.all()
 
         data = [{"x": name, "y": float(v)} for _pid, name, v in rows if v is not None]
+        fmeta = {"label_map": label_map}
+
+        title = f"{dir_label} {int(limit)} {stat_label(stat)} — {y}"
+        if pa_col is not None and eff_min_pa:
+            title += " (qualified)"
+            fmeta["qualifier"] = {
+                "min_pa": int(eff_min_pa),
+                "rule": "MLB 3.1 PA per scheduled game (Rule 9.22)",
+                "scheduled_games": _scheduled_games(y),
+                "pa_column": pa_name,
+            }
+        elif stat in RATE_QUAL_STATS and eff_min_pa and pa_col is None:
+            fmeta["warnings"] = [{"type": "missing_pa_column", "year": y, "wanted_min_pa": int(eff_min_pa)}]
+
         facets.append({
-            "title": f"{dir_label} {int(limit)} {stat_label(stat)} — {y}",
+            "title": title,
             "chart_type": "bar",
             "series": [{"id": stat, "data": data}],
-            "meta": {"label_map": label_map},
+            "meta": fmeta,
         })
 
     meta = {
@@ -387,9 +494,13 @@ def yoy_change(db, player_id, stat, start_year=None, end_year=None):
 
 def percentile_rank(db, player_ids, stat, year, min_pa=None):
     col = resolve_stat_column(db, stat)
+
+    pa_name = _pa_column_name(db)
+    pa_col = resolve_stat_column(db, pa_name) if (pa_name and min_pa) else None
+
     q = db.query(BattingStats.player_id, BattingStats.full_name, col.label("v")).filter(BattingStats.year == year)
-    if min_pa and col_exists(db, "plate_appearances"):
-        q = q.filter(resolve_stat_column(db, "plate_appearances") >= int(min_pa))
+    if pa_col is not None:
+        q = q.filter(pa_col >= int(min_pa))
     league = q.all()
 
     league_vals = [float(v) for pid, name, v in league if v is not None]
@@ -417,8 +528,10 @@ def improvement_leaderboard(db, stat, year_start, year_end, limit=10, min_pa=Non
         db.query(BattingStats.player_id, BattingStats.full_name, BattingStats.year, col.label("v"))
         .filter(BattingStats.year.in_([year_start, year_end]))
     )
-    if min_pa and col_exists(db, "plate_appearances"):
-        q = q.filter(resolve_stat_column(db, "plate_appearances") >= int(min_pa))
+    if min_pa:
+        pa_name = _pa_column_name(db)
+        if pa_name:
+            q = q.filter(resolve_stat_column(db, pa_name) >= int(min_pa))
 
     rows = q.all()
     if not rows:
@@ -442,10 +555,12 @@ def improvement_leaderboard(db, stat, year_start, year_end, limit=10, min_pa=Non
 # ----------------- 7) rate per PA (bar) -----------------
 
 def rate_per_pa(db, player_ids, numerator_stat, year, per=600, pa_col="plate_appearances"):
-    if not col_exists(db, pa_col):
-        raise ValueError(f"Missing column: {pa_col}")
+    # Use whichever PA column actually exists.
+    real_pa_name = _pa_column_name(db) or pa_col
+    if not col_exists(db, real_pa_name) and real_pa_name not in table_columns(db):
+        raise ValueError(f"Missing column: {real_pa_name}")
     num = resolve_stat_column(db, numerator_stat)
-    pa = resolve_stat_column(db, pa_col)
+    pa = resolve_stat_column(db, real_pa_name)
 
     rows = (
         db.query(BattingStats.full_name, num.label("n"), pa.label("pa"))
@@ -492,9 +607,13 @@ def radar_multistat(db, player_ids, stats, year):
 
 def stat_histogram(db, stat, year, bins=12, min_pa=None):
     col = resolve_stat_column(db, stat)
+
+    pa_name = _pa_column_name(db)
+    pa_col = resolve_stat_column(db, pa_name) if (pa_name and min_pa) else None
+
     q = db.query(col.label("v")).filter(BattingStats.year == year)
-    if min_pa and col_exists(db, "plate_appearances"):
-        q = q.filter(resolve_stat_column(db, "plate_appearances") >= int(min_pa))
+    if pa_col is not None:
+        q = q.filter(pa_col >= int(min_pa))
     vals = [float(v) for (v,) in q.all() if v is not None]
     if not vals:
         meta = {"title": f"{stat_label(stat)} histogram ({year})", "label_map": label_map_for([stat])}
@@ -594,8 +713,10 @@ def compare_multi(
     per_pa = None
     if isinstance(normalize, dict) and "per_pa" in normalize:
         per_pa = int(normalize["per_pa"])
-        if not col_exists(db, "plate_appearances"):
-            raise ValueError("normalize.per_pa requested but 'plate_appearances' column not found.")
+        real_pa_name = _pa_column_name(db) or "plate_appearances"
+        if not col_exists(db, real_pa_name) and real_pa_name not in table_columns(db):
+            raise ValueError("normalize.per_pa requested but a PA column was not found.")
+        # if we got here, downstream usage will resolve the correct column
 
     for s in stats:
         _ = resolve_stat_column(db, s)
@@ -619,8 +740,11 @@ def compare_multi(
                     )
             else:
                 col = resolve_stat_column(db, s)
+
+                # Use real PA column if normalization is requested
+                real_pa_name = _pa_column_name(db) or "plate_appearances"
                 row = (
-                    db.query(col.label("v"), BattingStats.plate_appearances.label("pa"))
+                    db.query(col.label("v"), resolve_stat_column(db, real_pa_name).label("pa"))
                     .filter(BattingStats.player_id == pid, BattingStats.year == year)
                     .first()
                 )
@@ -637,7 +761,7 @@ def compare_multi(
                     val = None
                 else:
                     v = float(row[0]) if row[0] is not None else None
-                    pa = int(row[1]) if len(row) > 1 and row[1] is not None else None
+                    pa_val = int(row[1]) if len(row) > 1 and row[1] is not None else None
                     if v is None:
                         warnings.append(
                             {
@@ -648,8 +772,8 @@ def compare_multi(
                                 "year": year,
                             }
                         )
-                    if per_pa and v is not None and pa and pa > 0:
-                        v = (v / pa) * per_pa
+                    if per_pa and v is not None and pa_val and pa_val > 0:
+                        v = (v / pa_val) * per_pa
                     val = v
             matrix[pid][s] = val
 
