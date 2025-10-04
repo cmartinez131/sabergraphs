@@ -2,20 +2,24 @@ function csvEscape(v) {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
+
 function toCSV(headers, rows) {
   const head = headers.map(csvEscape).join(",");
   const body = rows.map((r) => r.map((c) => csvEscape(c))).join("\n");
   return head + "\n" + body;
 }
+
 function formatCsvCell(v) {
   if (v === null || v === undefined) return "";
   const n = Number(v);
   if (!Number.isNaN(n) && Number.isFinite(n)) return n.toFixed(3).replace(/\.?0+$/, "");
   return String(v);
 }
+
 export function sanitizeFileName(s) {
   return String(s || "chart").replace(/[^\w\d\-]+/g, "_").slice(0, 80);
 }
+
 export function downloadURL(url, filename) {
   const a = document.createElement("a");
   a.href = url;
@@ -24,6 +28,7 @@ export function downloadURL(url, filename) {
   a.click();
   a.remove();
 }
+
 export function downloadTextAsFile(text, filename, mime = "text/csv;charset=utf-8;") {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -38,6 +43,7 @@ function guessXHeader(series, meta) {
   if (meta?.mode === "players_by_stat" || typeof firstX === "string") return "Player";
   return "Category";
 }
+
 function labelizeIdSimple(id, labelMap) {
   if (!id) return "";
   return labelMap?.[id] || id;
@@ -57,7 +63,7 @@ export function csvFromBarOrLine(inSeries, meta) {
 
   if ((inSeries || []).length === 1) {
     const s = inSeries[0];
-    const yLabel = meta?.label_map ? Object.values(meta.label_map)[0] || s.id : s.id;
+    const yLabel = labelizeIdSimple(s.id, meta?.label_map || {});
     const rows = xs.map((x) => {
       const hit = (s.data || []).find((p) => p.x === x);
       return [x, hit ? formatCsvCell(hit.y) : ""];
