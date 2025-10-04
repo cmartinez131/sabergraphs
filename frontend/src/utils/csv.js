@@ -1,3 +1,5 @@
+// frontend/src/utils/csv.js 
+
 function csvEscape(v) {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -52,6 +54,32 @@ function labelizeIdSimple(id, labelMap) {
 // builders
 export function csvFromBarOrLine(inSeries, meta) {
   const xHeader = guessXHeader(inSeries, meta);
+
+  // ---------- NEW: tidy CSV for collapsed "leaders by year" (limit==1) ----------
+  // Backend sets meta.legend_by = "player" and gives numeric x=year + meta.y_label.
+  if (meta?.legend_by === "player" && typeof inSeries?.[0]?.data?.[0]?.x === "number") {
+    const yHeader = meta?.y_label || "Value";
+    const rows = [];
+
+    (inSeries || []).forEach((s) => {
+      (s.data || []).forEach((p) => {
+        // Year, Stat value, Player
+        rows.push([p.x, formatCsvCell(p.y), s.id]);
+      });
+    });
+
+    // Keep year order stable (prefer backend-provided x_years)
+    if (Array.isArray(meta?.x_years) && meta.x_years.length) {
+      const pos = new Map(meta.x_years.map((v, i) => [Number(v), i]));
+      rows.sort((a, b) => (pos.get(Number(a[0])) ?? Infinity) - (pos.get(Number(b[0])) ?? Infinity));
+    } else {
+      rows.sort((a, b) => Number(a[0]) - Number(b[0]));
+    }
+
+    return toCSV(["Year", yHeader, "Player"], rows);
+  }
+  // ------------------------------------------------------------------------------
+
   let xs = Array.from(new Set((inSeries || []).flatMap((s) => (s.data || []).map((p) => p.x))));
   const metaYears = Array.isArray(meta?.x_years) ? meta.x_years.map((n) => Number(n)) : null;
   if (metaYears && metaYears.length) {

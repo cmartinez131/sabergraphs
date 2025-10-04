@@ -1,31 +1,26 @@
 # backend/app/agent/prompt.py
 """
-Turn free-text user prompts into a concrete plan (tool + args),
-run the matching toolkit function, and return a canonical payload:
-{ "chart_type": "<bar|line|radar|histogram|facet>", "series": [...], "narration": "..." }
+Baseball-aware prompt → plan → execute → chart payload pipeline.
 
-Upgrades in this version:
-- Canonical stat override from raw text (OPS→on_base_plus_slg, OBP, SLG, wOBA, HR, AVG, ISO).
-- Parse "next season", "next N years", "for the next N years", "in N years" (no regex).
-- Default projection method to "aging_knn" when a forecast intent is detected.
-- Add OPS few-shot so the LLM learns that "OPS" === on_base_plus_slg.
-- Actually EXECUTE forecasts here (aging+KNN or baseline), so /api/prompt returns real series.
+- Translates free-text prompts into a concrete plan (tool + args).
+- Executes toolkit functions and returns a canonical payload:
+  {
+    "chart_type": "<bar|line|radar|histogram|facet>",
+    "series": [...],
+    "narration": "..."
+  }
 
-New in this revision:
-- Historical single-year comparisons narrated in past tense (no "projected/expected").
-- Forecast narration includes: method blurb, explicit "Answer:" line (e.g., value in N years w/ age),
-  and improved p10/p90 legend labels via meta.label_map.
-- ✅ Leaderboard intent (single-year and range) supported end-to-end and routed to toolkit.leaderboard(_range).
-- ✅ NEW: leaderboard_by_year → per-year single-season leaders over a year range (faceted bars).
-- ✅ Bugfix: harden leaderboard_by_year path when years/limit are missing/null.
-- ✅ If leaderboard_by_year has limit==1 (top-1 per year), collapse into ONE bar chart:
-     - series are players (legend shows player names, bar color = player)
-     - x = year
-     - y-axis labeled with the stat via meta.y_label
-- ✅ Harden compare/compare_multi plans using years parsed from raw text (fixes "2019–2025" collapsing to single year).
-- ✅ Leaderboard-by-year narration upgraded with "most seasons led" + longest-streak summary.
-- ✅ DEFAULT: for prompts like "Home run leaders 2020 to 2025", assume **single-season leaders each year**
-     (leaderboard_by_year, limit=1) unless the user **explicitly** says totals/overall/combined/avg.
+Key behaviors:
+- Robust baseball stat aliasing (rates, x-stats, EV/LA, OAA, etc.).
+- Rate-first canonicalization (e.g., "K%" → k_percent) to avoid count-versus-rate confusion.
+- Guarded override so canonical hints do NOT clobber good stats already normalized from the text.
+- Leaderboard-by-year default (top-1) collapse into a single colored bar series.
+- Historical single-year comparisons narrated in past tense; forecasts include method/answer lines.
+
+This module expects the surrounding package to provide:
+- ..db.models.BattingStats (SQLAlchemy)
+- ..toolkit.stats.* utilities and leaderboard tools
+- ..toolkit.projections.* and ..toolkit.aging.project_stat_aging_knn
 """
 
 import os, json, difflib, unicodedata
@@ -66,6 +61,18 @@ OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # -------------------- Human-readable labels --------------------
 STAT_LABELS = dict(TOOLKIT_LABELS)
+
+def _supported_stats(db):
+    """
+    Columns that the planner may pick. Start with real DB columns, then
+    add virtuals that the toolkit can compute (e.g., OPS).
+    This keeps things working even if some datasets omit a physical column.
+    """
+    cols = set(table_columns(db))
+    # Virtuals the toolkit can resolve in stats.resolve_stat_column
+    cols.update({"on_base_plus_slg"})  # OPS
+    return cols
+
 
 def replace_stat_tokens(text: str) -> str:
     if not isinstance(text, str) or not text:
@@ -141,29 +148,114 @@ def extract_years(text: str):
 
 
 # -------------------- STAT canonicalization --------------------
+# Broad alias coverage: synonyms, abbreviations, and vernacular.
 ALIAS_MAP = {
-    "woba": ["woba"],
+    # Core rates/averages
+    "woba": ["woba", "weighted on base average", "weighted on-base average"],
+    "xwoba": ["xwoba", "expected woba", "expected weighted on base"],
     "on_base_plus_slg": ["ops", "on base plus slugging", "on-base plus slugging"],
     "on_base_percent": ["obp", "on base percentage", "on-base percentage"],
     "slg_percent": ["slg", "slugging", "slugging percentage"],
     "isolated_power": ["iso", "isolated power"],
-    "batting_avg": ["batting average", "avg", "batting avg"],
-    "home_run": ["hr", "home run", "home runs", "homers", "homer"],
-    "r_total_stolen_base": ["steal", "steals", "stolen base", "stolen bases", "sb"],
-    "bb_percent": ["bb%", "walk rate", "bb percent", "bb pct", "bb percentage"],
-    "k_percent": ["k%", "strikeout rate", "k percent", "k pct", "k percentage"],
-    "barrel_batted_rate": ["barrel", "barrels", "barrel rate", "barrel%"],
-    "sprint_speed": ["sprint speed"],
-    "plate_appearances": ["plate appearances", "pa"],
-    "meatball_percent": ["meatball percent", "meatball%", "meatball pct"],
-    "meatball_swing_percent": ["meatball swing percent", "meatball swing%", "meatball swing pct"],
+    "batting_avg": ["batting average", "avg", "ba"],
+    "babip": ["babip", "batting average on balls in play"],
+    "wobacon": ["wobacon", "woba on contact", "woba on-contact"],
+    "xwobacon": ["xwobacon", "expected wobacon", "x woba on contact"],
+    "bacon": ["bacon", "ba on contact", "batting average on contact"],
+    "xbacon": ["xbacon", "expected ba on contact", "x ba on contact"],
+    "xba": ["xba", "expected batting average", "expected ba"],
+    "xslg": ["xslg", "expected slugging"],
+    "xobp": ["xobp", "expected obp", "expected on base"],
+    "xiso": ["xiso", "expected iso", "expected isolated power"],
+
+    # Counting stats (batting)
+    "home_run": ["hr", "homers", "home runs", "homer"],
+    "hit": ["hits", "h"],
+    "single": ["singles", "1b"],
+    "double": ["doubles", "2b"],
+    "triple": ["triples", "3b"],
+    "strikeout": ["k", "so", "strikeouts"],
+    "walk": ["bb", "walks", "base on balls"],
     "b_rbi": ["rbi", "rbis", "runs batted in"],
+    "b_total_bases": ["tb", "total bases"],
+    "b_hit_by_pitch": ["hbp", "hit by pitch"],
+    "b_sac_fly": ["sf", "sac fly", "sacrifice fly"],
+    "b_sac_bunt": ["sh", "sac bunt", "sacrifice bunt"],
+    "b_gnd_into_dp": ["gidp", "grounded into double play"],
+    "b_gnd_into_tp": ["gitp", "grounded into triple play"],
+    "b_intent_walk": ["ibb", "intentional walk"],
+    "b_reached_on_error": ["roe", "reached on error"],
+    "b_total_pitches": ["pitches seen", "total pitches"],
+
+    # Plate-discipline rates
+    "bb_percent": ["bb%", "walk%", "walk rate", "bb pct", "bb percentage", "walk %"],
+    "k_percent": ["k%", "strikeout%", "strikeout rate", "k pct", "k percentage", "strikeout %"],
+    "whiff_percent": ["whiff%", "whiff rate"],
+    "swing_percent": ["swing%", "swing rate"],
+    "z_swing_percent": ["z-swing%", "zone swing%", "z swing rate"],
+    "z_swing_miss_percent": ["z-whiff%", "zone whiff%", "z swing miss%"],
+    "oz_swing_percent": ["o-swing%", "chase rate", "o swing%", "chase%"],
+    "oz_swing_miss_percent": ["o-whiff%", "o swing miss%"],
+    "oz_contact_percent": ["o-contact%", "out of zone contact%"],
+    "iz_contact_percent": ["z-contact%", "zone contact%"],
+    "f_strike_percent": ["first pitch strike%", "first-pitch strike%"],
+    "meatball_percent": ["meatball%", "meatball rate"],
+    "meatball_swing_percent": ["meatball swing%", "meatball swing rate"],
+
+    # Contact quality / batted-ball
+    "hard_hit_percent": ["hard hit%", "hard-hit%", "hard hit rate"],
+    "sweet_spot_percent": ["sweet spot%", "sweet-spot%", "sweet spot rate"],
+    "barrel_batted_rate": ["barrel%", "barrel rate"],
+    "barrel": ["barrels"],
+    "exit_velocity_avg": ["exit velocity", "exit velo", "avg exit velo", "ev"],
+    "launch_angle_avg": ["launch angle", "avg launch angle", "la"],
+    "groundballs_percent": ["gb%", "groundball%", "ground ball rate"],
+    "flyballs_percent": ["fb%", "flyball%", "fly ball rate"],
+    "linedrives_percent": ["ld%", "line drive%", "line-drive rate"],
+    "popups_percent": ["pu%", "popup%", "pop up rate"],
+    "pull_percent": ["pull%", "pull rate"],
+    "opposite_percent": ["oppo%", "opposite field%", "opposite rate"],
+    "straightaway_percent": ["straightaway%", "straightaway rate"],
+
+    # Zone aggregates / counts
+    "in_zone": ["in-zone pitches", "zone pitches"],
+    "out_zone": ["out of zone pitches", "o-zone pitches"],
+    "edge_percent": ["edge%", "edge rate"],
+    "edge": ["edge pitches"],
+
+    # Pitches seen by type
+    "pitch_count": ["pitches seen"],
+    "pitch_count_fastball": ["fastballs seen", "fastball seen"],
+    "pitch_count_breaking": ["breaking seen", "breaking balls seen"],
+    "pitch_count_offspeed": ["offspeed seen"],
+
+    # Running & steals
+    "r_total_stolen_base": ["steal", "steals", "stolen base", "stolen bases", "sb"],
+    "r_total_caught_stealing": ["caught stealing", "cs"],
+    "r_stolen_base_pct": ["sb%", "stolen base%"],
+    "r_total_pickoff": ["pickoffs"],
+    "r_run": ["runs", "r"],
+
+    # Speed
+    "sprint_speed": ["sprint speed", "sprint ft/s", "speed"],
+    "n_bolts": ["bolts"],
+    "hp_to_1b": ["home to first", "home-to-first", "htf"],
+
+    # Defense/OAA
+    "n_outs_above_average": ["oaa", "outs above average"],
+
+    # Misc swing metrics
+    "avg_swing_speed": ["swing speed"],
+    "avg_swing_length": ["swing length"],
+    "fast_swing_rate": ["fast swing%", "fast swing rate"],
+    "squared_up_contact": ["squared-up contact", "squared up contact%"],
+    "squared_up_swing": ["squared-up swing", "squared up swing%"],
 }
 
 def normalize_stat(db, user_stat: str) -> str or None:
     if not user_stat:
         return None
-    cols = table_columns(db)
+    cols = _supported_stats(db)
     txt = normalize_for_match(user_stat)
 
     if txt in cols:
@@ -188,9 +280,11 @@ def normalize_stat(db, user_stat: str) -> str or None:
 
     shortlist = {
         "home_run","woba","batting_avg","on_base_plus_slg","on_base_percent","slg_percent",
-        "isolated_power","barrel_batted_rate","sprint_speed","plate_appearances",
-        "player_age","k_percent","bb_percent","r_total_stolen_base",
-        "meatball_percent","meatball_swing_percent","b_rbi",
+        "isolated_power","barrel_batted_rate","sprint_speed","plate_appearances","pa",
+        "player_age","k_percent","bb_percent","r_total_stolen_base","hard_hit_percent",
+        "meatball_percent","meatball_swing_percent","b_rbi","exit_velocity_avg","launch_angle_avg",
+        "xba","xslg","xwoba","xobp","xiso","wobacon","xwobacon","babip","r_stolen_base_pct",
+        "n_outs_above_average",
     } & cols
     candidates = list(shortlist) if shortlist else list(cols)
     match = difflib.get_close_matches(snake, candidates, n=1, cutoff=0.75)
@@ -207,6 +301,10 @@ def normalize_stats_list(db, stats):
 
 # ---------- Canonical stat override from raw text ----------
 def canonical_stat_from_text(db, text):
+    """
+    Return a canonical stat slug inferred directly from raw text.
+    IMPORTANT: rate-first detection so "K%" doesn't get mapped to 'strikeout'.
+    """
     if not isinstance(text, str) or not text.strip():
         return None
 
@@ -214,20 +312,71 @@ def canonical_stat_from_text(db, text):
     t = normalize_for_match(text)
     pad = f" {t} "
 
+    def exists(col): return col in cols
+
+    # --- RATE-FIRST: K% / BB% / rates before counts ---
+    if (" k% " in pad or " strikeout% " in pad or " strikeout % " in t or " strikeout rate " in t or " k pct " in pad or " k percentage " in t):
+        return "k_percent" if exists("k_percent") else None
+    if (" bb% " in pad or " walk% " in pad or " walk % " in t or " walk rate " in t or " bb pct " in pad or " bb percentage " in t):
+        return "bb_percent" if exists("bb_percent") else None
+
+    # heavy hitters...
     if (" ops " in pad) or (" on base plus slugging " in t) or (" on-base plus slugging " in t):
-        return "on_base_plus_slg" if "on_base_plus_slg" in cols else None
-    if " woba " in pad:
-        return "woba" if "woba" in cols else None
+        return "on_base_plus_slg" if exists("on_base_plus_slg") else None
+    if " woba " in pad and exists("woba"):
+        return "woba"
     if (" obp " in pad) or (" on base percentage " in t) or (" on-base percentage " in t):
-        return "on_base_percent" if "on_base_percent" in cols else None
+        return "on_base_percent" if exists("on_base_percent") else None
     if (" slg " in pad) or (" slugging " in t):
-        return "slg_percent" if "slg_percent" in cols else None
+        return "slg_percent" if exists("slg_percent") else None
     if (" iso " in pad) or (" isolated power " in t):
-        return "isolated_power" if "isolated_power" in cols else None
-    if (" batting average " in f" {t} ") or (" avg " in pad):
-        return "batting_avg" if "batting_avg" in cols else None
+        return "isolated_power" if exists("isolated_power") else None
+    if (" batting average " in pad) or (" avg " in pad) or (" ba " in pad):
+        return "batting_avg" if exists("batting_avg") else None
     if (" hr " in pad) or (" home run" in t) or (" homers " in pad) or (" homers" in t):
-        return "home_run" if "home_run" in cols else None
+        return "home_run" if exists("home_run") else None
+
+    # expanded: frequently asked advanced stats
+    if " xba " in pad or " expected batting average " in t:
+        return "xba" if exists("xba") else None
+    if " xslg " in pad or " expected slugging " in t:
+        return "xslg" if exists("xslg") else None
+    if " xwoba " in pad or " expected woba " in t:
+        return "xwoba" if exists("xwoba") else None
+    if " xobp " in pad or " expected obp " in t:
+        return "xobp" if exists("xobp") else None
+    if " xiso " in pad or " expected iso " in t:
+        return "xiso" if exists("xiso") else None
+    if " babip " in pad:
+        return "babip" if exists("babip") else None
+    if " rbi " in pad or " runs batted in " in t:
+        return "b_rbi" if exists("b_rbi") else None
+    if " tb " in pad or " total bases " in t:
+        return "b_total_bases" if exists("b_total_bases") else None
+    if " steals " in t or " stolen base " in t or " sb " in pad:
+        return "r_total_stolen_base" if exists("r_total_stolen_base") else None
+    if " whiff " in t:
+        return "whiff_percent" if exists("whiff_percent") else None
+    if " chase " in t:
+        return "oz_swing_percent" if exists("oz_swing_percent") else None
+    if " hard hit " in t or " hard-hit " in t:
+        return "hard_hit_percent" if exists("hard_hit_percent") else None
+    if " barrel " in t:
+        return "barrel_batted_rate" if exists("barrel_batted_rate") else ("barrel" if exists("barrel") else None)
+    if " exit velocity " in t or " exit velo " in t or " ev " in pad:
+        return "exit_velocity_avg" if exists("exit_velocity_avg") else None
+    if " launch angle " in t or " la " in pad:
+        return "launch_angle_avg" if exists("launch_angle_avg") else None
+    if " oaa " in pad or " outs above average " in t:
+        return "n_outs_above_average" if exists("n_outs_above_average") else None
+    if " sprint speed " in t:
+        return "sprint_speed" if exists("sprint_speed") else None
+
+    # --- COUNTS LAST (so they don't steal rate queries) ---
+    if " strikeouts " in t or " so " in pad or " k " in pad:
+        return "strikeout" if exists("strikeout") else None
+    if " walks " in t or " bb " in pad:
+        return "walk" if exists("walk") else None
 
     return None
 
@@ -243,28 +392,40 @@ def get_llm_client():
 
 def build_system_instructions(allowed_stats):
     allow_str = ", ".join(sorted(allowed_stats))
-    return (
-        "Translate baseball analytics prompts into ONE JSON plan the backend can run.\n"
-        "TOOLS:\n"
-        " - compare: args {players:[string|int,...], stat:str, year:int? OR start_year:int & end_year:int}\n"
-        " - compare_multi: args {players:[string|int,...], stats:[str,...], year:int?, start_year:int?, end_year:int?, mode:str?, layout:str?}\n"
-        " - leaderboard: args {stat:str, year:int?, limit:int?, order:'asc'|'desc'?}\n"
-        " - leaderboard_range: args {stat:str, start_year:int, end_year:int, limit:int?, agg:'sum'|'avg'?, order:'asc'|'desc'?}\n"
-        " - leaderboard_by_year: args {stat:str, start_year:int, end_year:int, limit:int?, order:'asc'|'desc'?, min_pa:int?}\n"
-        " - predict: args {player:string|int, stat:str, years:int, horizon:int?, method:str?}\n"
-        "RESPONSE: JSON only, no prose. Example:\n"
-        '{\"tool\":\"compare\",\"args\":{\"players\":[\"David Ortiz\",\"Torii Hunter\"],\"stat\":\"home_run\",\"year\":2015}}\n'
-        "RULES:\n"
-        " - The 'stat' or items in 'stats' MUST be among: [" + allow_str + "].\n"
-        " - Map natural phrases to these names: batting average→batting_avg, OPS→on_base_plus_slg, "
-        "   OBP→on_base_percent, SLG→slg_percent, ISO→isolated_power, HR→home_run, steals/SB→r_total_stolen_base.\n"
-        " - 'top/bottom N STAT in YEAR' -> leaderboard with limit=N (order desc/asc).\n"
-        " - 'top/bottom N STAT between Y1 and Y2' -> leaderboard_range with agg='sum' (or 'avg' if user says average/mean).\n"
-        " - 'top/bottom N STAT each year between Y1 and Y2' or 'single-season leaders Y1–Y2' -> leaderboard_by_year.\n"
-        " - 'compare in YEAR' -> compare+year (bar). Year range -> compare+start_year/end_year (line).\n"
-        " - 'compare X, Y, Z across HR and wOBA in YEAR' -> compare_multi with stats=[...].\n"
-        " - 'project/predict/forecast' -> predict. Prefer method='aging_knn' for multi-year forecasts."
-    )
+    return f"""
+        Translate baseball analytics prompts into ONE JSON plan the backend can run.
+        TOOLS:
+        - compare: args {{players:[string|int,...], stat:str, year:int? OR start_year:int & end_year:int}}
+        - compare_multi: args {{players:[string|int,...], stats:[str,...], year:int?, start_year:int?, end_year:int?, mode:str?, layout:str?}}
+        - leaderboard: args {{stat:str, year:int?, limit:int?, order:'asc'|'desc'?}}
+        - leaderboard_range: args {{stat:str, start_year:int, end_year:int, limit:int?, agg:'sum'|'avg'?, order:'asc'|'desc'?}}
+        - leaderboard_by_year: args {{stat:str, start_year:int, end_year:int, limit:int?, order:'asc'|'desc'?, min_pa:int?}}
+        - predict: args {{player:string|int, stat:str, years:int, horizon:int?, method:str?}}
+        RESPONSE: JSON only, no prose. Example:
+        {{"tool":"compare","args":{{"players":["David Ortiz","Torii Hunter"],"stat":"home_run","year":2015}}}}
+        RULES:
+        - The 'stat' or items in 'stats' MUST be among: [{allow_str}].
+        - Map natural phrases to these names: batting average→batting_avg, OPS→on_base_plus_slg,
+        OBP→on_base_percent, SLG→slg_percent, ISO→isolated_power, HR→home_run, steals/SB→r_total_stolen_base,
+        RBI→b_rbi, TB→b_total_bases, HBP→b_hit_by_pitch, IBB→b_intent_walk, xBA→xba, xSLG→xslg, xwOBA→xwoba.
+        - 'top/bottom N STAT in YEAR' -> leaderboard with limit=N (order desc/asc).
+        - 'top/bottom N STAT between Y1 and Y2' -> leaderboard_range with agg='sum' (or 'avg' if user says average/mean).
+        - 'top/bottom N STAT each year between Y1 and Y2' or 'single-season leaders Y1–Y2' -> leaderboard_by_year.
+        - 'compare in YEAR' -> compare+year (bar). Year range -> compare+start_year/end_year (line).
+        - 'compare X, Y, Z across HR and wOBA in YEAR' -> compare_multi with stats=[...].
+        - 'project/predict/forecast' -> predict. Prefer method='aging_knn' for multi-year forecasts.
+
+        QUALIFICATION:
+        - For rate stats (any *_percent plus AVG/OBP/SLG/OPS/wOBA/BABIP and x-versions), do NOT add a custom min_pa unless the user explicitly asks.
+            The backend automatically enforces MLB Rule 9.22 (3.1 PA per scheduled game) for single years and across spans.
+        
+        AMBIGUITY / RANGES:
+        - If the user gives a range like "2019–2021", infer intent:
+            * If they say 'each year', 'by year', etc. → leaderboard_by_year (per-season leaders).
+            * If they say 'average' on a rate stat → leaderboard_range with agg='avg'.
+            * Else → leaderboard_range with agg='sum' (counts) or 'avg' (rate stats).
+        """.strip()
+
 
 def fewshot_messages(allowed_stats, user_text: str):
     return [
@@ -294,10 +455,10 @@ def fewshot_messages(allowed_stats, user_text: str):
             "tool": "leaderboard_by_year",
             "args": {"stat": "home_run", "start_year": 2020, "end_year": 2025, "limit": 1, "order": "desc"}
         })},
-        {"role": "user", "content": "Project David Ortiz wOBA for the next 3 years"},
+        {"role": "user", "content": "Project José Ramírez OPS for the next 3 years"},
         {"role": "assistant", "content": json.dumps({
             "tool": "predict",
-            "args": {"player": "David Ortiz", "stat": "woba", "years": 3, "horizon": 3, "method": "aging_knn"}
+            "args": {"player": "José Ramírez", "stat": "on_base_plus_slg", "years": 3, "horizon": 3, "method": "aging_knn"}
         })},
         {"role": "user", "content": "Compare José Ramírez and Rafael Devers OPS in 2024"},
         {"role": "assistant", "content": json.dumps({
@@ -309,7 +470,7 @@ def fewshot_messages(allowed_stats, user_text: str):
 
 def llm_plan_from_text(db, text):
     client = get_llm_client()
-    cols = table_columns(db)
+    cols = _supported_stats(db)
     allow = sorted([c for c in cols if c not in ("full_name",)])
 
     if not client:
@@ -540,19 +701,42 @@ def guess_stat_from_text(db, t: str) -> str:
     if s:
         return s
     tt = normalize_for_match(t)
-    cols = table_columns(db)
+    cols = _supported_stats(db)
+
+    # RATE-FIRST guesses
+    if ((" k% " in f" {tt} ") or (" strikeout% " in f" {tt} ") or (" strikeout rate " in tt) or (" strikeout % " in tt)) and "k_percent" in cols:
+        return "k_percent"
+    if ((" bb% " in f" {tt} ") or (" walk% " in f" {tt} ") or (" walk rate " in tt) or (" walk % " in tt)) and "bb_percent" in cols:
+        return "bb_percent"
+
     if "ops" in tt:
         return "on_base_plus_slg" if "on_base_plus_slg" in cols else "home_run"
-    if "woba" in tt:
-        return "woba" if "woba" in cols else "home_run"
+    if "woba" in tt and "woba" in cols:
+        return "woba"
+    if "xwoba" in tt and "xwoba" in cols:
+        return "xwoba"
+    if "xba" in tt and "xba" in cols:
+        return "xba"
+    if "xslg" in tt and "xslg" in cols:
+        return "xslg"
     if "obp" in tt:
         return "on_base_percent" if "on_base_percent" in cols else "home_run"
     if "slg" in tt or "slugging" in tt:
         return "slg_percent" if "slg_percent" in cols else "home_run"
-    if "home run" in tt or "hr" in tt or "homers" in tt:
+    if "home run" in tt or " hr " in f" {tt} " or "homers" in tt:
         return "home_run"
-    if "average" in tt or "avg" in tt:
+    if "rbi" in tt and "b_rbi" in cols:
+        return "b_rbi"
+    if "steal" in tt or " sb " in f" {tt} ":
+        return "r_total_stolen_base" if "r_total_stolen_base" in cols else "home_run"
+    if "average" in tt or " avg " in f" {tt} " or " ba " in f" {tt} ":
         return "batting_avg" if "batting_avg" in cols else "home_run"
+    if "hard hit" in tt and "hard_hit_percent" in cols:
+        return "hard_hit_percent"
+    if "barrel" in tt and "barrel_batted_rate" in cols:
+        return "barrel_batted_rate"
+    if "exit velo" in tt and "exit_velocity_avg" in cols:
+        return "exit_velocity_avg"
     return "home_run"
 
 def cheap_rules_fallback(db, text):
@@ -863,7 +1047,7 @@ def leaders_combined_answer(stat: str, data, leaders_by_year, start_year: int, e
     return (base + more + streak).strip()
 
 
-# -------------------- Public entry point --------------------
+# -------------------- Public entry point helpers --------------------
 def narration_from_plan(db, plan):
     try:
         tool = plan.get("tool")
@@ -902,11 +1086,13 @@ def narration_from_plan(db, plan):
     return "AI summary unavailable."
 
 
+# -------------------- Public entry point --------------------
 def run_prompt(db, text, debug=False):
     plan, source = llm_plan_from_text(db, text)
     tool = (plan or {}).get("tool")
     args = (plan or {}).get("args") or {}
 
+    # --- initial normalization from args ---
     if "stat" in args:
         norm = normalize_stat(db, args.get("stat"))
         if norm:
@@ -914,13 +1100,31 @@ def run_prompt(db, text, debug=False):
     if "stats" in args and isinstance(args["stats"], list):
         args["stats"] = normalize_stats_list(db, args["stats"])
 
+    # ---------- IMPORTANT: guarded canonical override ----------
+    # Only override when: no current stat; or current isn't a real column; or same-family upgrade.
+    def same_family(a, b):
+        fams = [
+            {"k_percent", "strikeout"},
+            {"bb_percent", "walk"},
+            # Treat OPS as the same family as its components so an "OPS" hint
+            # can override an accidental SLG/OBP selection.
+            {"on_base_plus_slg", "slg_percent", "on_base_percent"},
+        ]
+        for f in fams:
+            if a in f or b in f:
+                return (a in f) and (b in f)
+        return False
+
     hint = canonical_stat_from_text(db, text)
     if hint:
-        if "stat" in args and args.get("stat"):
+        current = args.get("stat")
+        cols = _supported_stats(db)
+        if (not current) or (current not in cols) or same_family(current, hint):
             args["stat"] = hint
-        elif "stats" in args and isinstance(args.get("stats"), list) and args["stats"]:
-            if hint not in args["stats"]:
-                args["stats"] = [hint] + args["stats"]
+        # If user provided 'stats' list but it's empty and we have a hint, seed it.
+        elif "stats" in args and not args.get("stats"):
+            args["stats"] = [hint]
+    # ------------------------------------------------------------------
 
     if tool == "predict":
         if not isinstance(args.get("horizon"), int) or args["horizon"] < 1:
@@ -953,9 +1157,8 @@ def run_prompt(db, text, debug=False):
             if wants_per_year:
                 plan["tool"] = "leaderboard_by_year"
                 tool = "leaderboard_by_year"
-                # default to top-1 per year if user didn't specify
                 if not isinstance(args.get("limit"), int):
-                    args["limit"] = 1
+                    args["limit"] = 1  # default top-1 per year
             else:
                 plan["tool"] = "leaderboard_range"
                 tool = "leaderboard_range"
@@ -974,7 +1177,9 @@ def run_prompt(db, text, debug=False):
             args["limit"] = lim
 
         if "agg" not in args and tool == "leaderboard_range":
-            args["agg"] = "avg" if any(w in tnorm for w in ["avg", "average", "mean", "per year"]) else "sum"
+            # Prefer avg for rate stats unless explicitly told "total"
+            rate_hints = any(w in tnorm for w in ["avg", "average", "mean", "per year"])
+            args["agg"] = "avg" if rate_hints else ("sum" if not rate_hints else "avg")
 
         if "order" not in args:
             args["order"] = "asc" if any(w in tnorm for w in ["fewest", "lowest", "bottom", "worst"]) else "desc"
@@ -1132,6 +1337,11 @@ def run_prompt(db, text, debug=False):
                 "leaders_by_year": leaders_by_year_map,
                 "y_label": stat_label(stat),
                 "legend_by": "player",
+                # Important: we collapse to one bar per year but still emit one key per player.
+                # In grouped mode, Nivo positions the bar at that player's slot inside the year band,
+                # which makes the visible bar shift left/right each year and look uneven.
+                # Stacked centers the bar in the band's middle, fixing the apparent spacing issue.
+                "layout": "stacked",
             }
             out = {"chart_type": "bar", "series": series, "meta": meta}
 
@@ -1273,7 +1483,7 @@ def run_prompt(db, text, debug=False):
             out = {"chart_type": "line", "series": series, "meta": meta}
 
             if series and series[0]["data"]:
-                last = series[0]["data"][-0 - 1]
+                last = series[0]["data"][-1]
                 answer_line = f" Answer: In {last['x']}, projected {stat_label(stat)}: {fmt_number(last['y'])}."
             else:
                 answer_line = ""
@@ -1299,6 +1509,7 @@ def run_prompt(db, text, debug=False):
             out["plan"] = plan
         return attach_label_metadata(out)
 
+    # ---------- default ----------
     out = {"chart_type": "bar", "series": [], "meta": {"label_map": {}}}
     out["narration"] = "No plan produced."
     if debug:

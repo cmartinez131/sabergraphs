@@ -1,4 +1,3 @@
-// frontend/src/pages/Home.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toPng } from "html-to-image";
@@ -228,26 +227,25 @@ export default function Home() {
   async function exportPNG() {
     if (!chartNodeRef.current) return;
 
-    // Snap only the chart canvas (no outer padding/border)
-    const chartEl =
-      chartNodeRef.current.querySelector(".chart-box") || chartNodeRef.current;
+    // For facets, capture the whole grid. Otherwise capture the single chart surface (title + chart).
+    const selector = chartType === "facet" ? ".facet-grid" : ".chart-surface";
+    const surface =
+      chartNodeRef.current.querySelector(selector) || chartNodeRef.current;
 
-    // lock a consistent canvas size for export (16:9)
-    const SNAP_W = 1200;
-    const SNAP_H = 675;
+    // Apply bright, print-friendly export skin and lock size via CSS
+    surface.classList.add("export-snapshot");
+
+    // Pin key CSS vars inline so the cloned SVG resolves them
+    const css = getComputedStyle(surface);
+    ["--stroke", "--text", "--tooltip-bg"].forEach((v) => {
+      surface.style.setProperty(v, css.getPropertyValue(v));
+    });
 
     try {
-      // Strip ornamental spacing and force exact canvas size
-      chartEl.classList.add("exporting");
-
-      const dataUrl = await toPng(chartEl, {
-        width: SNAP_W,
-        height: SNAP_H,
-        pixelRatio: 2, // retina
+      const dataUrl = await toPng(surface, {
+        pixelRatio: 2,
         backgroundColor: "#ffffff",
         cacheBust: true,
-        // ensure html-to-image renders the same box it captures
-        style: { width: `${SNAP_W}px`, height: `${SNAP_H}px` },
       });
 
       const base = sanitizeFileName(meta?.title || "sabermetric_ai_chart");
@@ -256,7 +254,10 @@ export default function Home() {
       console.error("PNG export failed", e);
       alert("PNG export failed (see console).");
     } finally {
-      chartEl.classList.remove("exporting");
+      surface.classList.remove("export-snapshot");
+      ["--stroke", "--text", "--tooltip-bg"].forEach((v) =>
+        surface.style.removeProperty(v)
+      );
     }
   }
 

@@ -1,3 +1,5 @@
+// frontend/src/utils/labels.js
+
 export function applyLabelMapToText(text, labelMap) {
   if (!text || !labelMap) return text;
   let out = String(text);

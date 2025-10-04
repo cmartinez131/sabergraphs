@@ -1,8 +1,7 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { ResponsiveLine } from "@nivo/line";
 import { ResponsiveBar } from "@nivo/bar";
 import { ResponsiveRadar } from "@nivo/radar";
-import nivoTheme from "../../utils/nivoTheme";
 import {
   fmtNumber,
   isCategorical,
@@ -30,6 +29,36 @@ function Shell({ title, children }) {
 export default function ChartRenderer({ chartType, series, meta }) {
   const yLegend = meta?.y_label || "Value";
   const labelMap = meta?.label_map || {};
+
+  // Build a literal-color Nivo theme from current CSS variables.
+  // Using concrete colors (not var(--...)) ensures html-to-image preserves grid/axis lines in PNG exports.
+  const theme = useMemo(() => {
+    const css = getComputedStyle(document.documentElement);
+    const STROKE = (css.getPropertyValue("--stroke") || "#d0d6ea").trim();
+    const TEXT = (css.getPropertyValue("--text") || "#0d1220").trim();
+    const TBG = (css.getPropertyValue("--tooltip-bg") || "#ffffff").trim();
+    return {
+      textColor: TEXT,
+      fontSize: 12,
+      axis: {
+        ticks: { text: { fill: TEXT } },
+        legend: { text: { fill: TEXT } },
+        domain: { line: { stroke: STROKE } },
+      },
+      grid: { line: { stroke: STROKE } },
+      legends: { text: { fill: TEXT } },
+      tooltip: {
+        container: {
+          background: TBG,
+          color: TEXT,
+          border: `1px solid ${STROKE}`,
+          borderRadius: 12,
+          padding: 10,
+          boxShadow: "var(--shadow)",
+        },
+      },
+    };
+  }, []);
 
   function deriveTitle() {
     if (meta?.title) return meta.title;
@@ -62,7 +91,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
           data={prettyData}
           keys={keys}
           indexBy="stat"
-          theme={nivoTheme}
+          theme={theme}
           margin={{ top: 40, right: 60, bottom: 60, left: 60 }}
           curve="linearClosed"
           gridLevels={5}
@@ -111,7 +140,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
           groupMode={groupMode}
           margin={{ top: 20, right: 28, bottom: bottomMargin, left: 56 }}
           padding={0.3}
-          theme={nivoTheme}
+          theme={theme}
           enableGridY
           enableGridX
           valueFormat={(v) => fmtNumber(v)}
@@ -206,7 +235,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
     <Shell title={deriveTitle()}>
       <ResponsiveLine
         data={seriesForLine}
-        theme={nivoTheme}
+        theme={theme}
         margin={{ top: 20, right: 28, bottom: lineBottom, left: 56 }}
         xScale={categorical ? { type: "point" } : { type: "linear", min: minX, max: maxX }}
         yScale={{ type: "linear", min: "auto", max: "auto" }}
