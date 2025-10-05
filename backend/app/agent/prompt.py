@@ -44,6 +44,7 @@ from ..toolkit.stats import (
     name_for_id,
     STAT_LABELS as TOOLKIT_LABELS,
     latest_year as stats_latest_year,
+    is_rate_stat,               # <-- added
     # --- leaderboard tools ---
     leaderboard,
     leaderboard_range,
@@ -205,7 +206,7 @@ ALIAS_MAP = {
     # Contact quality / batted-ball
     "hard_hit_percent": ["hard hit%", "hard-hit%", "hard hit rate"],
     "sweet_spot_percent": ["sweet spot%", "sweet-spot%", "sweet spot rate"],
-    "barrel_batted_rate": ["barrel%", "barrel rate"],
+    "barrel_batted_rate": ["barrel%" , "barrel rate"],
     "barrel": ["barrels"],
     "exit_velocity_avg": ["exit velocity", "exit velo", "avg exit velo", "ev"],
     "launch_angle_avg": ["launch angle", "avg launch angle", "la"],
@@ -573,6 +574,52 @@ def resolve_single_player_id(db, player_or_id):
                  .first())
         return int(row[0]) if row else None
     return None
+
+# --------- Single-player detector ---------
+def _alias_token_vocab():
+    """Lowercased tokens from ALIAS_MAP keys/phrases to filter out stat words."""
+    vocab = set()
+    for canon, phrases in ALIAS_MAP.items():
+        for w in normalize_for_match(canon).split():
+            if w:
+                vocab.add(w)
+        for p in phrases:
+            for w in normalize_for_match(p).split():
+                if w:
+                    vocab.add(w)
+    # common glue words / nouns not useful for person detection
+    vocab.update({
+        "top","best","most","fewest","lowest","bottom","worst","leaders","leaderboard",
+        "compare","compared","versus","vs","and","or","with","without","between","to","from","in","of",
+        "each","year","years","season","seasons","single","singleseason","by",
+        "total","overall","combined","sum","aggregate",
+        "avg","average","mean","per","percent","percentage","rate",
+        "home","run","runs","rbi","steals","stolen","base","bases","slugging","ops","obp","slg","woba","iso",
+    })
+    return vocab
+
+def detect_single_player_id_from_text(db, text: str):
+    """
+    Try to uniquely resolve ONE player from the raw text by probing tokens.
+    No regex: uses normalize_for_match + simple splits.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+
+    stop = _alias_token_vocab()
+    tokens = [w for w in normalize_for_match(text).split()
+              if w and w.isalpha() and len(w) >= 3 and w not in stop]
+
+    found = []
+    seen = set()
+    for t in tokens:
+        pid = resolve_single_player_id(db, t)
+        if pid is not None and pid not in seen:
+            found.append(pid)
+            seen.add(pid)
+
+    # only trust it when there's exactly one unique match
+    return found[0] if len(found) == 1 else None
 
 
 # -------------------- Intent / horizon --------------------
@@ -1126,6 +1173,51 @@ def run_prompt(db, text, debug=False):
             args["stats"] = [hint]
     # ------------------------------------------------------------------
 
+    # ---- normalize planner quirks: single-stat 'compare_multi' → 'compare' ----
+    if tool == "compare_multi":
+        stats_list = [s for s in (args.get("stats") or []) if s]
+        if not stats_list and args.get("stat"):
+            stats_list = [args["stat"]]
+        if len(stats_list) <= 1:
+            # choose a sensible stat
+            stat_slug = stats_list[0] if stats_list else (canonical_stat_from_text(db, text) or "home_run")
+            stat_slug = normalize_stat(db, stat_slug) or stat_slug
+            args = {
+                "players": args.get("players") or args.get("player_ids"),
+                "stat": stat_slug,
+                "year": args.get("year"),
+                "start_year": args.get("start_year"),
+                "end_year": args.get("end_year"),
+            }
+            plan = {"tool": "compare", "args": args}
+            tool = "compare"
+
+    # --- Rescue: if the text clearly names ONE player and includes a year range, force a line compare
+    detected_pid = detect_single_player_id_from_text(db, text)
+    yrs_in_text = extract_years(text)
+    if detected_pid and len(yrs_in_text) >= 2:
+        y0, y1 = int(yrs_in_text[0]), int(yrs_in_text[1])
+        if y0 > y1:
+            y0, y1 = y1, y0
+
+        if tool not in ("compare", "compare_multi"):
+            stat_hint = args.get("stat") or canonical_stat_from_text(db, text) or "home_run"
+            plan = {
+                "tool": "compare",
+                "args": {"player_ids": [detected_pid], "stat": stat_hint, "start_year": y0, "end_year": y1}
+            }
+            tool = "compare"
+            args = plan["args"]
+        else:
+            # Seed missing pieces on an existing compare plan
+            args = dict(args)
+            if not args.get("players") and not args.get("player_ids"):
+                args["player_ids"] = [detected_pid]
+            if "start_year" not in args and "end_year" not in args:
+                args["start_year"], args["end_year"] = y0, y1
+            plan["args"] = args
+            tool = plan["tool"]
+
     if tool == "predict":
         if not isinstance(args.get("horizon"), int) or args["horizon"] < 1:
             h = parse_horizon(text)
@@ -1177,9 +1269,13 @@ def run_prompt(db, text, debug=False):
             args["limit"] = lim
 
         if "agg" not in args and tool == "leaderboard_range":
-            # Prefer avg for rate stats unless explicitly told "total"
+            # Prefer avg for rate stats; else use rate hints or sum for counts
+            stat_slug = args.get("stat") or canonical_stat_from_text(db, text) or "home_run"
             rate_hints = any(w in tnorm for w in ["avg", "average", "mean", "per year"])
-            args["agg"] = "avg" if rate_hints else ("sum" if not rate_hints else "avg")
+            if is_rate_stat(stat_slug):
+                args["agg"] = "avg"
+            else:
+                args["agg"] = "avg" if rate_hints else "sum"
 
         if "order" not in args:
             args["order"] = "asc" if any(w in tnorm for w in ["fewest", "lowest", "bottom", "worst"]) else "desc"

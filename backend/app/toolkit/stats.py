@@ -100,6 +100,7 @@ STAT_LABELS = {
     "oz_swing_percent": "O-Swing %",
     "oz_swing_miss_percent": "O-Whiff %",
     "oz_contact_percent": "O-Contact %",
+    "iz_contact_percent": "Z-Contact %",
     "f_strike_percent": "First-Pitch Strike %",
     "meatball_percent": "Meatball %",
     "meatball_swing_percent": "Meatball Swing %",
@@ -266,7 +267,7 @@ def stat_label(slug: str) -> str:
     parts = [p for p in slug.split("_") if p]
     if not parts:
         return slug
-    base = " ".join(w.capitalize() for w in parts)
+    base = " " .join(w.capitalize() for w in parts)
     if base.endswith(" Percent"):
         base = base[: -len(" Percent")] + " %"
     # Light acronym polish
@@ -396,6 +397,10 @@ def names_for_ids(db, ids):
 
 # ----------------- compare (bar/line) -----------------
 def compare_players_by_season(db, player_ids, stat, year=None, start_year=None, end_year=None):
+    """
+    Player-vs-player view. **Do not hide** under-qualified rate seasons; instead
+    include the values and attach warnings so the UI can badge them.
+    """
     col = resolve_stat_column(db, stat)
     if year and (start_year or end_year):
         raise ValueError("Provide either 'year' OR 'start_year'+'end_year', not both.")
@@ -405,7 +410,7 @@ def compare_players_by_season(db, player_ids, stat, year=None, start_year=None, 
     names_map = names_for_ids(db, player_ids)
     names_in_order = [names_map.get(pid, str(pid)) for pid in player_ids]
 
-    # qualification prep
+    # qualification prep (we only WARN; we do not filter points)
     pa_name = _pa_column_name(db)
     want_qual = is_rate_stat(stat) and (pa_name is not None)
     pa_col = resolve_stat_column(db, pa_name) if want_qual else literal_column("0")
@@ -431,7 +436,7 @@ def compare_players_by_season(db, player_ids, stat, year=None, start_year=None, 
 
     rows = q.order_by(BattingStats.full_name, BattingStats.year).all()
 
-    # filter for rate qualification if needed
+    # Keep values; only warn if under-qualified
     filtered = []
     for pid, name, y, v, pa in rows:
         if v is None:
@@ -444,7 +449,6 @@ def compare_players_by_season(db, player_ids, stat, year=None, start_year=None, 
                     "player_id": pid, "player": name, "year": int(y),
                     "stat": stat, "pa": int(pa or 0), "needed_pa": int(thresh),
                 })
-                continue
         filtered.append((pid, name, y, float(v)))
 
     if is_single_year:
@@ -453,7 +457,7 @@ def compare_players_by_season(db, player_ids, stat, year=None, start_year=None, 
         for pid in missing_pids:
             meta["warnings"].append(
                 {"type": "missing_value", "player_id": pid, "player": names_map.get(pid, str(pid)),
-                 "year": year, "stat": stat, "reason": "no qualified value for that year"}
+                 "year": year, "stat": stat, "reason": "no value for that year"}
             )
         data = [{"x": name, "y": v} for (_pid, name, _y, v) in filtered]
         meta["title"] = f"{' vs '.join(names_in_order)} — {stat_label(stat)} ({year})"
@@ -623,13 +627,18 @@ def leaderboard_by_year(db, stat, start_year, end_year, limit=10, order="desc", 
 
 # ----------------- 2) career arc (line) -----------------
 def career_arc(db, player_id, stat, start_year=None, end_year=None):
+    """
+    Single-player timeline. **Do not drop** under-qualified rate seasons; include
+    the values and attach warnings in meta so the UI can badge them.
+    """
     col = resolve_stat_column(db, stat)
     if not start_year or not end_year:
         end_year = end_year or latest_year(db)
         start_year = start_year or end_year - 6
 
-    want_qual = is_rate_stat(stat) and (_pa_column_name(db) is not None)
-    pa_col = resolve_stat_column(db, _pa_column_name(db)) if want_qual else literal_column("0")
+    pa_name = _pa_column_name(db)
+    want_qual = is_rate_stat(stat) and (pa_name is not None)
+    pa_col = resolve_stat_column(db, pa_name) if want_qual else literal_column("0")
 
     rows = (
         db.query(BattingStats.year, col.label("v"), pa_col.label("pa"))
@@ -640,12 +649,21 @@ def career_arc(db, player_id, stat, start_year=None, end_year=None):
     )
 
     pts = []
+    warnings = []
     for y, v, pa in rows:
         if v is None:
             continue
         if want_qual:
-            if pa is None or int(pa) < _qualified_pa_threshold(int(y)):
-                continue
+            need = _qualified_pa_threshold(int(y))
+            if pa is None or int(pa) < int(need):
+                warnings.append({
+                    "type": "unqualified_rate_season",
+                    "player_id": int(player_id),
+                    "year": int(y),
+                    "stat": stat,
+                    "pa": int(pa or 0),
+                    "needed_pa": int(need),
+                })
         pts.append({"x": int(y), "y": float(v)})
 
     name = db.query(BattingStats.full_name).filter(BattingStats.player_id == player_id).first()
@@ -655,6 +673,8 @@ def career_arc(db, player_id, stat, start_year=None, end_year=None):
         "title": f"{label} — {stat_label(stat)} ({start_year}–{end_year})",
         "label_map": label_map_for([stat]),
     }
+    if warnings:
+        meta["warnings"] = warnings
     return {"chart_type": "line", "series": [{"id": label, "data": pts}], "meta": meta}
 
 
@@ -665,6 +685,7 @@ def rolling_mean(db, player_id, stat, window=3, start_year=None, end_year=None):
         end_year = end_year or latest_year(db)
         start_year = start_year or end_year - 8
 
+    # Keep behavior here unchanged (can be relaxed similarly if desired)
     want_qual = is_rate_stat(stat) and (_pa_column_name(db) is not None)
     pa_col = resolve_stat_column(db, _pa_column_name(db)) if want_qual else literal_column("0")
 
@@ -717,6 +738,7 @@ def yoy_change(db, player_id, stat, start_year=None, end_year=None):
         end_year = end_year or latest_year(db)
         start_year = start_year or end_year - 8
 
+    # Keep behavior here unchanged (can be relaxed similarly if desired)
     want_qual = is_rate_stat(stat) and (_pa_column_name(db) is not None)
     pa_col = resolve_stat_column(db, _pa_column_name(db)) if want_qual else literal_column("0")
 
@@ -753,7 +775,7 @@ def yoy_change(db, player_id, stat, start_year=None, end_year=None):
 def percentile_rank(db, player_ids, stat, year, min_pa=None):
     col = resolve_stat_column(db, stat)
 
-    # auto-qualification for rate stats
+    # auto-qualification for rate stats (leaderboard context)
     eff_min = _auto_min_pa_if_rate_stat(stat, year, min_pa)
 
     pa_name = _pa_column_name(db)
@@ -785,7 +807,7 @@ def percentile_rank(db, player_ids, stat, year, min_pa=None):
 def improvement_leaderboard(db, stat, year_start, year_end, limit=10, min_pa=None):
     col = resolve_stat_column(db, stat)
 
-    # if rate stat and no min_pa supplied, enforce MLB threshold per year
+    # if rate stat and no min_pa supplied, enforce MLB threshold per year (leaderboard context)
     auto_enforce = is_rate_stat(stat) and (_pa_column_name(db) is not None) and (min_pa is None)
     pa_col = resolve_stat_column(db, _pa_column_name(db)) if (_pa_column_name(db) and (min_pa or auto_enforce)) else None
     need_start = _qualified_pa_threshold(year_start) if auto_enforce else (min_pa or None)
@@ -1066,7 +1088,7 @@ def compare_multi(
                     v = float(row[0]) if row[0] is not None else None
                     pa_val = int(row[1]) if len(row) > 1 and row[1] is not None else None
 
-                    # auto-qualify rate stats in single-year multi-compare
+                    # For player compare views: keep value even if under-qualified; warn only.
                     if v is not None and is_rate_stat(s) and pa_val is not None:
                         need = _qualified_pa_threshold(year)
                         if pa_val < need:
@@ -1075,7 +1097,7 @@ def compare_multi(
                                 "player_id": pid, "player": labels[pid], "stat": s, "year": year,
                                 "pa": int(pa_val), "needed_pa": int(need),
                             })
-                            v = None
+                            # keep v
 
                     if v is None:
                         warnings.append(

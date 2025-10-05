@@ -112,6 +112,12 @@ Constraints:
 - For ranges: WHERE <table>.year BETWEEN Y1 AND Y2.
 - When ranking, include ORDER BY and LIMIT (default LIMIT 50 if user doesn't say).
 - Chart types: choose "bar" (categorical x) or "line" (time series).
+- If the prompt names a SINGLE PLAYER and a YEAR RANGE, return a per-year time series:
+  SELECT b.year AS year, <stat> AS value
+  FROM batting_stats b
+  WHERE b.full_name ILIKE '%<player>%' AND b.year BETWEEN Y1 AND Y2
+  ORDER BY year ASC;
+  Use chart_type="line". Do NOT aggregate, do NOT ORDER BY the value, and do NOT LIMIT.
 
 Return JSON:
 {{
@@ -174,6 +180,17 @@ def fewshotMessages(catalog, user_text):
             ),
             "x": "pos", "y": "on_base_plus_slg", "chart_type": "bar",
             "assumptions": "OPS = OBP + SLG; grouped by position."
+        })},
+        # NEW: steer single-player + range to a per-year time series (no SUM/LIMIT).
+        {"role": "user", "content": "judge slugging % from 2022 to 2025"},
+        {"role": "assistant", "content": json.dumps({
+            "sql": (
+                "SELECT b.year AS year, b.slg_percent "
+                "FROM batting_stats b "
+                "WHERE b.full_name ILIKE '%judge%' AND b.year BETWEEN 2022 AND 2025 "
+                "ORDER BY year ASC;"
+            ),
+            "x": "year", "y": "slg_percent", "chart_type": "line", "assumptions": ""
         })},
         {"role": "user", "content": user_text},
     ]

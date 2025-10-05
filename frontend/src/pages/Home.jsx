@@ -104,30 +104,38 @@ export default function Home() {
         "Judge vs Soto home runs in 2025",
         "Trout vs Harper batting average in 2019",
         "Compare Carroll, Witt Jr., and Tatis Jr. sprint speed in 2024",
+        "Compare Acuña, Soto, and Betts on OPS and HR in 2023",
+        "Compare Lindor and Marte on steals and runs from 2020 to 2025",
       ],
       "Project future stats": [
         "Forecast Aaron Judge OPS for the next 6 years",
         "Estimate Shohei Ohtani HR for the next 3 years",
         "Forecast Juan Soto SLG for the next 3 years",
+        "Project Elly De La Cruz stolen bases over the next 4 years",
+        "Over the next 5 years, project Julio Rodríguez HR",
       ],
-      "Get stat leaders and rankings": [
-        "leader in single season slugging percentage from 2020 to 2025",
+      "Get stat leaderboards and rankings": [
+        "Hit by pitch leaders 2017–2019 (sum)",
         "top 5 players in home runs in 2025",
+        "Top 10 barrel% in 2022",
+        "Lowest 10 K% in 2022",
         "bottom 10 strikeout % in 2023",
-        "show the top 12 stolen bases totals between 2024 and 2025",
+        "leader in single season slugging percentage from 2020 to 2025",
+        "top 12 stolen bases totals between 2024 and 2025",
         "top 8 OPS average from 2022 to 2024",
-        "most single season OPS 2015 to 2025",
         "single-season HR leaders 2020-2025",
       ],
       "Analyze player trends": [
         "Juan Soto hits from 2019 to 2025",
-        "Aaron Judge slugging % from 2022 to 2025",
+        "K% by season for Ronald Acuña Jr. 2019–2023",
+        "Stanton slugging % from 2022 to 2025",
         "bregman home runs 2015 to 2025",
       ],
       "Look up a single stat": [
         "Shohei Ohtani OPS in 2024",
         "Mookie Betts wOBA in 2020",
         "Soto Steals in 2025",
+        "Most RBIs in 2019"
       ],
     }),
     []
@@ -348,7 +356,7 @@ export default function Home() {
               <input
                 ref={heroInputRef}
                 className="prompt-input big"
-                placeholder="Compare Judge, Soto, and Lindor on HR, RBI, OPS in 2025"
+                placeholder="Top 5 players in home runs in 2025"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 aria-label="Ask Sabermetric AI"
