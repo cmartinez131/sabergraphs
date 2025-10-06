@@ -311,42 +311,54 @@ export default function Home() {
   const backendState = backend.ok ? "ok" : backend.ok === false ? "error" : "warn";
 
   /* ---------- Exports ---------- */
-  async function exportPNG() {
-    if (!chartNodeRef.current) return;
+  // inside Home.jsx
+async function exportPNG({ mode = "screen", size = 1200 } = {}) {
+  if (!chartNodeRef.current) return;
 
-    // For facets, capture the whole grid. Otherwise capture the single chart surface (title + chart).
-    const selector = chartType === "facet" ? ".facet-grid" : ".chart-surface";
-    const surface =
-      chartNodeRef.current.querySelector(selector) || chartNodeRef.current;
+  // Capture just the chart area (title + chart), or facet grid
+  const selector = chartType === "facet" ? ".facet-grid" : ".chart-surface";
+  const node = chartNodeRef.current.querySelector(selector) || chartNodeRef.current;
 
-    // Apply bright, print-friendly export skin and lock size via CSS
-    surface.classList.add("export-snapshot");
+  const rect = node.getBoundingClientRect();
+  let W = rect.width, H = rect.height;
+  const style = {
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+    margin: 0,
+    padding: 0,
+    transformOrigin: "top left",
+  };
 
-    // Pin key CSS vars inline so the cloned SVG resolves them
-    const css = getComputedStyle(surface);
-    ["--stroke", "--text", "--tooltip-bg"].forEach((v) => {
-      surface.style.setProperty(v, css.getPropertyValue(v));
-    });
-
-    try {
-      const dataUrl = await toPng(surface, {
-        pixelRatio: 2,
-        backgroundColor: "#ffffff",
-        cacheBust: true,
-      });
-
-      const base = sanitizeFileName(meta?.title || "sabermetric_ai_chart");
-      downloadURL(dataUrl, `${base}.png`);
-    } catch (e) {
-      console.error("PNG export failed", e);
-      alert("PNG export failed (see console).");
-    } finally {
-      surface.classList.remove("export-snapshot");
-      ["--stroke", "--text", "--tooltip-bg"].forEach((v) =>
-        surface.style.removeProperty(v)
-      );
-    }
+  if (mode === "square-stretch") {
+    // Fill a square by stretching X and Y independently
+    W = H = size;
+    style.transform = `scale(${W / rect.width}, ${H / rect.height})`;
+  } else if (mode === "square-pad") {
+    // Keep aspect, center inside a square (letterbox)
+    W = H = size;
+    const s = Math.min(W / rect.width, H / rect.height);
+    const offX = (W - rect.width * s) / 2;
+    const offY = (H - rect.height * s) / 2;
+    style.transform = `translate(${offX}px, ${offY}px) scale(${s})`;
   }
+
+  try {
+    const dataUrl = await toPng(node, {
+      width: W,
+      height: H,
+      style,          
+      backgroundColor: "#ffffff",
+      cacheBust: true,
+      pixelRatio: 2,
+    });
+    const base = sanitizeFileName(meta?.title || "sabermetric_ai_chart");
+    downloadURL(dataUrl, `${base}.png`);
+  } catch (e) {
+    console.error("PNG export failed", e);
+    alert("PNG export failed (see console).");
+  }
+}
+
 
   function exportCSV() {
     let csv = "";

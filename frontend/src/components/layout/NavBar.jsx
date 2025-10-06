@@ -133,6 +133,9 @@ export default function NavBar({
         <Link className="btn ghost small hide-on-phone" to="/about-me" title="Read about me page">
           About me
         </Link>
+        {/* <Link className="btn ghost small hide-on-phone" to="/pricing" title="Plans and pricing page">
+          Pricing
+        </Link> */}
 
         <button className="btn light small hide-on-phone" type="button">Log in</button>
         <button className="btn primary small hide-on-phone" type="button">Sign up for free</button>
