@@ -93,9 +93,9 @@ export default function NavBar({
 
           {helpOpen && (
             <div className="menu glass" role="menu">
-              <Link className="menu-item" role="menuitem" to="/pricing" onClick={() => setHelpOpen(false)}>
+              {/* <Link className="menu-item" role="menuitem" to="/pricing" onClick={() => setHelpOpen(false)}>
                 See plans & pricing
-              </Link>
+              </Link> */}
 
               {/* REMOVED: Settings button */}
 

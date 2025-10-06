@@ -1,12 +1,23 @@
+// frontend/src/pages/Home.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toPng } from "html-to-image";
-import { health as apiHealth, prompt as apiPrompt } from "../hooks/api";
+
+import {
+  health as apiHealth,
+  prompt as apiPrompt,
+  historyLog,
+  historyRecent,
+  historyGet,
+  historyDelete, // delete endpoint
+} from "../hooks/api";
+
 import NavBar from "../components/layout/NavBar";
 import Sidebar from "../components/layout/Sidebar";
 import StatusPill from "../components/common/StatusPill";
 import ChartSkeleton from "../components/common/ChartSkeleton";
 import ChartRenderer from "../components/charts/ChartRenderer";
+
 import {
   csvFromBarOrLine,
   csvFromRadar,
@@ -16,6 +27,23 @@ import {
   downloadURL,
 } from "../utils/csv";
 import { applyLabelMapToText } from "../utils/labels";
+
+// ---- tiny util to show "2h", "3d", etc. for updated time ----
+function timeAgoISO(iso) {
+  try {
+    const t = new Date(iso).getTime();
+    const s = Math.floor((Date.now() - t) / 1000);
+    if (s < 60) return "now";
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h`;
+    const d = Math.floor(h / 24);
+    return `${d}d`;
+  } catch {
+    return "";
+  }
+}
 
 const months = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"];
 function genLine() {
@@ -36,13 +64,18 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [hasChart, setHasChart] = useState(false);
+
   const [chartType, setChartType] = useState("line");
   const [series, setSeries] = useState(genLine());
   const [facets, setFacets] = useState(null);
   const [meta, setMeta] = useState({});
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chartSummary, setChartSummary] = useState("");
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState(document.documentElement.dataset.theme || "dark");
+
+  // Server-backed conversations list
+  const [conversations, setConversations] = useState([]);
 
   const heroInputRef = useRef(null);
   const composerInputRef = useRef(null);
@@ -50,17 +83,7 @@ export default function Home() {
   const navigate = useNavigate();
 
   const active = loading || hasChart;
-  const loggedIn = false;
-
-  const conversations = useMemo(
-    () => [
-      { id: "c1", title: "Judge vs. Ohtani (last 3 yrs)", updated: "Today" },
-      { id: "c2", title: "Volpe OPS Projection", updated: "Yesterday" },
-      { id: "c3", title: "Yankees odds by week", updated: "2d ago" },
-      { id: "c4", title: "Top Barrel% since 2019", updated: "3d ago" },
-    ],
-    []
-  );
+  const loggedIn = false; // wire to real auth later
 
   // ---------- Health check ----------
   useEffect(() => {
@@ -70,13 +93,35 @@ export default function Home() {
         if (cancelled) return;
         const msg = d?.message || "";
         const ok = d?.status === "ok" || /running|ready|hello|ok/i.test(msg);
-        setBackend({ ok, text: ok ? "Running" : (msg || "Connecting...") });
+        setBackend({ ok, text: ok ? "Running" : msg || "Connecting..." });
       })
       .catch(() => {
         if (cancelled) return;
         setBackend({ ok: false, text: "Could not connect to backend." });
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ---------- Load recent conversations from server ----------
+  async function loadRecent() {
+    try {
+      const list = await historyRecent(20);
+      setConversations(
+        (list || []).map((c) => ({
+          id: c.id,
+          title: c.title,
+          updated: timeAgoISO(c.updated_at),
+        }))
+      );
+    } catch {
+      // Silent fail keeps UI usable even if history is down
+    }
+  }
+
+  useEffect(() => {
+    loadRecent();
   }, []);
 
   // Follow OS theme changes if user hasn't manually chosen
@@ -135,7 +180,7 @@ export default function Home() {
         "Shohei Ohtani OPS in 2024",
         "Mookie Betts wOBA in 2020",
         "Soto Steals in 2025",
-        "Most RBIs in 2019"
+        "Most RBIs in 2019",
       ],
     }),
     []
@@ -154,13 +199,32 @@ export default function Home() {
     setChartSummary("");
     setFacets(null);
     setMeta({});
-    setTimeout(() => {
-      setSeries(genLine());
+    setTimeout(async () => {
+      const demoSeries = genLine();
+      const payload = {
+        chart_type: "line",
+        series: demoSeries,
+        meta: { title: "Demo line chart" },
+        narration: "Quick take: the trend peaks mid-season before cooling off into September.",
+      };
+
+      setSeries(demoSeries);
       setChartType("line");
       setLoading(false);
       setHasChart(true);
-      setChartSummary("Quick take: the trend peaks mid-season before cooling off into September.");
+      setChartSummary(payload.narration);
       window.scrollTo({ top: 0, behavior: "smooth" });
+
+      // ALWAYS create a new conversation for the demo
+      try {
+        await historyLog({
+          prompt: "demo",
+          payload,
+          title: "Demo line chart",
+          conversation_id: null, // ← force new conversation
+        });
+        await loadRecent();
+      } catch {}
     }, 800);
   }
 
@@ -172,6 +236,7 @@ export default function Home() {
     setMeta({});
     try {
       const res = await apiPrompt(text);
+
       if (res.chart_type === "facet") {
         setChartType("facet");
         const fac = (res.facets || []).map((f) => ({
@@ -184,6 +249,7 @@ export default function Home() {
         setChartType(res.chart_type || "bar");
         setSeries(res.series || []);
       }
+
       const incomingMeta = res.meta || {};
       if (incomingMeta.title) {
         incomingMeta.title = applyLabelMapToText(incomingMeta.title, incomingMeta.label_map || {});
@@ -192,6 +258,19 @@ export default function Home() {
       setChartSummary(res.narration || "");
       setHasChart(true);
       window.scrollTo({ top: 0, behavior: "smooth" });
+
+      // ALWAYS create a new conversation for every prompt
+      try {
+        await historyLog({
+          prompt: text,
+          payload: res,
+          title: incomingMeta.title || text.slice(0, 80),
+          conversation_id: null, // ← force new conversation
+        });
+        await loadRecent();
+      } catch {
+        // history errors shouldn't block UX
+      }
     } catch (e) {
       alert("Prompt failed: " + e.message);
     } finally {
@@ -299,9 +378,41 @@ export default function Home() {
         conversations={conversations}
         onSelectConversation={(c) => {
           setSidebarOpen(false);
-          setQuery(c.title);
-          const target = (loading || hasChart) ? composerInputRef.current : heroInputRef.current;
-          if (target) target.focus();
+          // READ-ONLY VIEW: load and render the last entry but DO NOT set a conversation id.
+          historyGet(c.id)
+            .then((conv) => {
+              const entries = conv?.entries || [];
+              const last = entries[entries.length - 1];
+              if (!last) return;
+              const payload = last.payload || {};
+
+              setChartSummary(payload.narration || "");
+              setMeta(payload.meta || {});
+              if (payload.facets) {
+                setChartType("facet");
+                setFacets(payload.facets);
+                setSeries([]);
+              } else {
+                setChartType(payload.chart_type || "bar");
+                setSeries(payload.series || []);
+                setFacets(null);
+              }
+              setHasChart(true);
+              setQuery(last.prompt || "");
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            })
+            .catch(() => {});
+        }}
+        onDeleteConversation={async (id) => {
+          // Optimistic: remove immediately, then confirm with server
+          setConversations((prev) => prev.filter((x) => x.id !== id));
+          try {
+            await historyDelete(id);
+            await loadRecent();
+          } catch {
+            // If it fails, refresh from server to restore state
+            await loadRecent();
+          }
         }}
         loggedIn={loggedIn}
         onNewChat={resetUI}
@@ -311,7 +422,10 @@ export default function Home() {
       <NavBar
         theme={theme}
         onToggleTheme={toggleTheme}
-        onOpenSidebar={() => setSidebarOpen(true)}
+        onOpenSidebar={() => {
+          setSidebarOpen(true);
+          loadRecent();
+        }}
         onHomeClick={resetUI}
       />
 

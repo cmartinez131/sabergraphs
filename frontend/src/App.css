@@ -41,6 +41,9 @@
   /* Gradients */
   --grad-accent: linear-gradient(90deg, var(--accent), var(--accent-2));
   --grad-surface: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.04));
+
+  /* NEW: safe space above the fixed composer so the sidebar ends higher */
+  --composer-safe: 112px;
 }
 
 /* ---------- Base ---------- */
@@ -88,6 +91,10 @@ body {
   z-index: 4; display: grid; grid-template-rows: auto auto 1fr auto; padding: 12px; gap: 10px;
 }
 .sidebar.open { transform: translateX(0); box-shadow: 0 24px 50px rgba(0,0,0,0.5); }
+
+/* NEW: when composer is visible, keep sidebar above it */
+.App.is-active .sidebar { bottom: calc(var(--composer-safe) + 14px); }
+
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; }
 .sidebar-title { font-weight: 800; letter-spacing: .3px; }
 .icon-btn {
@@ -100,7 +107,18 @@ body {
 .icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(121,246,255,0.18); }
 .icon-btn.circle { border-radius: 999px; width: 38px; height: 38px; display: grid; place-items: center; }
 .new-chat { width: 100%; }
-.conv-list { display: grid; gap: 8px; overflow: auto; padding-right: 2px; }
+
+/* NEW: scrollable vertical stack for conversations */
+.conv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 4px;
+  padding-bottom: 4px;
+  min-height: 0; /* required for scroll inside grid area */
+}
+
 .conv-item {
   text-align: left; width: 100%;
   border: 1px solid var(--stroke);
@@ -111,8 +129,18 @@ body {
 }
 .conv-item:hover { transform: translateY(-2px); border-color: rgba(124,243,255,0.5); box-shadow: var(--shadow-sm); }
 .conv-item:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(121,246,255,0.18); }
-.conv-title { font-size: 13px; font-weight: 600; }
+
+/* NEW: clamp long titles for compact cards */
+.conv-title {
+  font-size: 13px;
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .conv-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
 .sidebar-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sidebar-foot .small { height: 36px; padding: 0 12px; }
 .sync-note { color: var(--muted); font-size: 12px; }
@@ -234,7 +262,16 @@ body {
 .chip:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(121,246,255,0.2); }
 
 /* ---------- Buttons ---------- */
-.btn { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--stroke); color: var(--text); background: rgba(255,255,255,0.07); cursor: pointer; user-select: none; transition: transform .08s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 44px; padding: 0 16px; border-radius: 12px;
+  border: 1px solid var(--stroke); color: var(--text);
+  background: rgba(255,255,255,0.07); cursor: pointer; user-select: none;
+  transition: transform .08s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease;
+}
+/* REMOVE underline when Links use .btn */
+.btn:link, .btn:visited, .btn { text-decoration: none; }
+
 .btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
 .btn:focus-visible { outline: none; box-shadow: 0 0 0 5px rgba(121,246,255,0.18); }
 .btn.primary { background: var(--grad-accent); color: #0b0c10; border-color: transparent; box-shadow: 0 10px 28px rgba(121,246,255,0.25); }
@@ -242,6 +279,28 @@ body {
 .btn.ghost { background: rgba(255,255,255,0.07); }
 .btn.light { background: rgba(255,255,255,0.92); color: #0b0c10; border-color: transparent; }
 .small { height: 38px; padding: 0 14px; }
+
+/* Polished pills for the two navbar links */
+.nav-actions .btn.ghost.small {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
+}
+.nav-actions .btn.ghost.small:hover {
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(124,243,255,0.45);
+  transform: translateY(-1px);
+}
+
+/* Light theme tweak for the pills */
+:root[data-theme="light"] .nav-actions .btn.ghost.small {
+  background: rgba(10,20,40,0.06);
+}
+:root[data-theme="light"] .nav-actions .btn.ghost.small:hover {
+  background: rgba(10,20,40,0.10);
+}
 
 /* ---------- Stage & charts ---------- */
 .stage { margin-top: 10px; }
@@ -332,7 +391,7 @@ body {
 .toggle-btn { border: 1px solid transparent; background: transparent; color: var(--text); padding: 8px 12px; border-radius: 10px; cursor: pointer; transition: background .2s ease, transform .08s ease; }
 .toggle-btn:hover { transform: translateY(-1px); background: rgba(255,255,255,0.06); }
 .toggle-btn.active { background: var(--grad-accent); color: #0b0c10; }
-.save-badge { margin-left: 6px; font-size: 11px; padding: 3px 6px; border-radius: 999px; background: rgba(255,255,255,0.92); color: #0b0c10; box-shadow: 0 6px 14px rgba(121,246,255,0.18); }
+.save-badge { margin-left: 6px; font-size: 11px; padding: 3px 6px; border-radius: 999px; border: 1px solid var(--stroke); background: rgba(255,255,255,0.92); color: #0b0c10; box-shadow: 0 6px 14px rgba(121,246,255,0.18); }
 
 .plan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
 .plan-card { padding: 16px; position: relative; transition: transform .12s ease, box-shadow .2s ease, outline-color .2s ease; }
@@ -364,9 +423,15 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, .chip:focu
 
 /* ---------- Responsive ---------- */
 @media (max-width:1080px){ .container, .nav { width: min(1000px, 92vw); } }
-@media (max-width:1020px){ .sidebar { top: 10px; bottom: 10px; left: 10px; } }
+@media (max-width:1020px){ .sidebar { top: 10px; left: 10px; } }
 @media (max-width:900px) { .status-row { grid-template-columns: 1fr; } .container, .nav { width: min(860px, 92vw); } }
-@media (max-width:720px) { .brand-title { font-size: 18px; } .logo { width: 28px; height: 28px; } .nav-actions .btn.light { display: none; } .composer { grid-template-columns: 1fr auto; } }
+@media (max-width:720px) {
+  .brand-title { font-size: 18px; }
+  .logo { width: 28px; height: 28px; }
+  .nav-actions .btn.light { display: none; }
+  .composer { grid-template-columns: 1fr auto; }
+  :root { --composer-safe: 96px; } /* smaller safe space on phones */
+}
 @media (max-width:600px) { .prompt { grid-template-columns: 1fr; } .plan-grid { grid-template-columns: 1fr; } .container, .nav { width: 92vw; } }
 
 /* =================================================================
@@ -492,3 +557,70 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, .chip:focu
   height: var(--export-h) !important;
 }
 
+/* --- Conversation row with options button (overlay popover style) --- */
+.conv-entry {
+  position: relative;                /* allow inline overlay within the row */
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: stretch;
+}
+.conv-entry .menu-anchor { position: relative; overflow: visible; }
+.dot-btn { width: 38px; height: 38px; }
+
+/* Dim the row slightly when the popover is open (optional) */
+.conv-entry.with-popover .conv-item { filter: saturate(0.92) brightness(0.95); }
+
+/* --- Tiny destructive popover (pill) --- */
+.conv-popover {
+  position: absolute;
+  right: 44px;                       /* sits just to the left of the 3-dot */
+  top: 50%;
+  transform: translateY(-50%) scale(1);
+  z-index: 7;
+  padding: 0;
+  background: transparent;           /* the button itself is the pill */
+  pointer-events: auto;
+  animation: popIn 120ms ease-out;
+}
+
+.pop-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid var(--stroke);
+  background: var(--bg-1);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: transform .08s ease, background .15s ease, border-color .15s ease;
+  margin-bottom: 32px;
+}
+
+.pop-item .pop-icon { font-size: 14px; line-height: 1; }
+
+.pop-item:hover {
+  transform: translateY(-1px);
+}
+
+/* Destructive styling */
+.pop-item.danger {
+  border-color: rgba(255, 107, 107, 0.35);
+  color: var(--error);
+}
+.pop-item.danger:hover {
+  background: rgb(255, 240, 241);
+  border-color: rgba(255, 107, 107, 0.55);
+}
+
+/* Entrance micro-animation */
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(-50%) scale(0.96); }
+  to   { opacity: 1; transform: translateY(-50%) scale(1); }
+}
