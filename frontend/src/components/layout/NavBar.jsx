@@ -3,25 +3,64 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 export default function NavBar({
-  onHomeClick,     // Home passes resetUI; other pages can omit
-  onOpenSidebar,   // optional: shows the hamburger and opens the sidebar
-  onToggleTheme,   // optional: enables the theme toggle item
-  theme = "dark",
+  onHomeClick,
+  onOpenSidebar,
+  onToggleTheme,
+  // theme = "dark",  // ← no longer needed; we'll resolve from DOM
 }) {
-  const [helpOpen, setHelpOpen] = useState(false);          // desktop "?" menu
-  const [mobileOpen, setMobileOpen] = useState(false);      // phone "⋯" menu
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const helpBtnRef = useRef(null);
   const mobileBtnRef = useRef(null);
   const navigate = useNavigate();
 
-  // Close any open menu on outside click / ESC
+  // ---- Resolve current theme from <html data-theme="..."> and keep it in sync
+  const getDomTheme = () => {
+    const t = document.documentElement.dataset.theme;
+    if (t) return t;
+    // fallback: OS light/dark if nothing set yet
+    try {
+      return window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark";
+    } catch {
+      return "dark";
+    }
+  };
+
+  const [resolvedTheme, setResolvedTheme] = useState(getDomTheme());
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => setResolvedTheme(getDomTheme());
+
+    // Observe data-theme attribute changes (toggles, OS updates, etc.)
+    const mo = new MutationObserver(sync);
+    mo.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+
+    // Also catch cross-tab localStorage changes to "theme"
+    const onStorage = (e) => {
+      if (e.key === "theme") sync();
+    };
+    window.addEventListener("storage", onStorage);
+
+    // Initial sync in case something changed before mount
+    sync();
+
+    return () => {
+      mo.disconnect();
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  // Close menus on outside click / ESC
   useEffect(() => {
     function onDocClick(e) {
       const clickedHelp =
         helpBtnRef.current && helpBtnRef.current.parentNode.contains(e.target);
       const clickedMobile =
         mobileBtnRef.current && mobileBtnRef.current.parentNode.contains(e.target);
-
       if (!clickedHelp) setHelpOpen(false);
       if (!clickedMobile) setMobileOpen(false);
     }
@@ -39,12 +78,10 @@ export default function NavBar({
     };
   }, []);
 
-  // Clicking the brand should always take you to a clean Home
   const handleBrandClick = () => {
-    if (onHomeClick) {
-      onHomeClick(); // Home: fully resets to the starter screen
-    } else {
-      navigate("/", { replace: true }); // Other pages: just route home
+    if (onHomeClick) onHomeClick();
+    else {
+      navigate("/", { replace: true });
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
@@ -55,12 +92,17 @@ export default function NavBar({
       role="menuitem"
       type="button"
       onClick={() => {
-        onToggleTheme();
+        onToggleTheme?.();
         setHelpOpen(false);
         setMobileOpen(false);
       }}
+      aria-label={
+        resolvedTheme === "light"
+          ? "Switch to dark theme"
+          : "Switch to light theme"
+      }
     >
-      {theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+      {resolvedTheme === "light" ? "Switch to dark theme" : "Switch to light theme"}
     </button>
   ) : null;
 
@@ -78,8 +120,6 @@ export default function NavBar({
             ☰
           </button>
         )}
-
-        {/* Button avoids underline styling and lets us run reset logic */}
         <button className="brand-home" onClick={handleBrandClick} title="New chat (Home)" type="button">
           <div className="logo">⚾︎</div>
           <span className="brand-title">sabermetric ai</span>
@@ -87,7 +127,6 @@ export default function NavBar({
       </div>
 
       <div className="nav-actions">
-        {/* Desktop/tablet actions */}
         <Link className="btn ghost small hide-on-phone" to="/product-spec" title="Read the product spec">
           Product spec
         </Link>
@@ -98,7 +137,6 @@ export default function NavBar({
         <button className="btn light small hide-on-phone" type="button">Log in</button>
         <button className="btn primary small hide-on-phone" type="button">Sign up for free</button>
 
-        {/* Desktop help menu ("?") */}
         <div className="menu-anchor hide-on-phone">
           <button
             ref={helpBtnRef}
@@ -117,9 +155,6 @@ export default function NavBar({
 
           {helpOpen && (
             <div className="menu glass" role="menu">
-              {/* <Link className="menu-item" role="menuitem" to="/pricing" onClick={() => setHelpOpen(false)}>
-                See plans & pricing
-              </Link> */}
               {ThemeToggleItem}
               <div className="menu-divider" />
               <Link className="menu-item" role="menuitem" to="/product-spec" onClick={() => setHelpOpen(false)}>
@@ -132,7 +167,6 @@ export default function NavBar({
           )}
         </div>
 
-        {/* Phone-only compact actions (⋯) */}
         <div className="menu-anchor show-on-phone">
           <button
             ref={mobileBtnRef}
@@ -157,16 +191,9 @@ export default function NavBar({
               <Link className="menu-item" role="menuitem" to="/about-me" onClick={() => setMobileOpen(false)}>
                 About me
               </Link>
-
               <div className="menu-divider" />
-
-              {/* <Link className="menu-item" role="menuitem" to="/pricing" onClick={() => setMobileOpen(false)}>
-                See plans & pricing
-              </Link> */}
               {ThemeToggleItem}
-
               <div className="menu-divider" />
-
               <button className="menu-item" type="button" onClick={() => setMobileOpen(false)}>
                 Log in
               </button>

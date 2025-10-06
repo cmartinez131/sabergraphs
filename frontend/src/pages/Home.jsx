@@ -420,11 +420,10 @@ export default function Home() {
 
       {/* Navbar */}
       <NavBar
-        theme={theme}
         onToggleTheme={toggleTheme}
-        onOpenSidebar={() => {
-          setSidebarOpen(true);
-          loadRecent();
+        onOpenSidebar={() => { 
+          setSidebarOpen(true); 
+          loadRecent(); 
         }}
         onHomeClick={resetUI}
       />
