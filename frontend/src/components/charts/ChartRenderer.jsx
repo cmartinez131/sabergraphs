@@ -1,3 +1,4 @@
+// frontend/src/components/charts/ChartRenderer.jsx
 import React, { useMemo } from "react";
 import { ResponsiveLine } from "@nivo/line";
 import { ResponsiveBar } from "@nivo/bar";
@@ -12,9 +13,117 @@ import {
   labelizeId,
 } from "../../utils/labels";
 
+/* ---------- Y-axis helpers (quant-friendly defaults) ----------
+
+Override knobs you can send from the backend inside `meta`:
+- meta.y_min: number       → hard minimum
+- meta.y_max: number       → hard maximum
+- meta.y_domain: [min,max] → hard domain
+- meta.baseline_zero: bool → force 0 baseline when true
+
+Auto rules if not explicitly set:
+- If all y ≥ 0 → min = 0 (baseline at 0).
+- If values look like rates (≤ 1.05) OR y_label mentions '%'/'rate'/AVG/OBP/wOBA:
+    • max = 1.0
+- If y_label mentions OPS or SLG:
+    • max = max(1.2, ceil(1.05*maxData, to 0.1))
+- Otherwise:
+    • max = a "nice" ceiling slightly above the data (1/2/5 × 10^k).
+---------------------------------------------------------------- */
+
+function seriesMinMax(series) {
+  let min = Infinity;
+  let max = -Infinity;
+  (series || []).forEach((s) =>
+    (s.data || []).forEach((p) => {
+      const y = Number(p?.y);
+      if (!Number.isNaN(y) && Number.isFinite(y)) {
+        if (y < min) min = y;
+        if (y > max) max = y;
+      }
+    })
+  );
+  if (min === Infinity) min = 0;
+  if (max === -Infinity) max = 0;
+  return { min, max };
+}
+
+function looksLikeRate(yLabel, { min, max }) {
+  const t = String(yLabel || "").toLowerCase();
+  if (t.includes("%") || t.includes("rate")) return true;
+  if (/\b(avg|ba|obp|woba|xwoba|xba|xobp|iso|babip)\b/i.test(t)) return true;
+  // data-driven hint
+  return max <= 1.05 && min >= 0;
+}
+
+function looksLikeOpsOrSlg(yLabel) {
+  const t = String(yLabel || "").toLowerCase();
+  return t.includes("ops") || t.includes("slg");
+}
+
+function niceCeil(n) {
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  const exp = Math.floor(Math.log10(n));
+  const base = 10 ** exp;
+  const scaled = n / base;
+  let step = 1;
+  if (scaled <= 1) step = 1;
+  else if (scaled <= 2) step = 2;
+  else if (scaled <= 5) step = 5;
+  else step = 10;
+  return step * base;
+}
+
+function ceilToTenth(n) {
+  return Math.ceil(n * 10) / 10;
+}
+
+function computeYMin(series, meta) {
+  // hard overrides
+  if (Array.isArray(meta?.y_domain) && meta.y_domain.length === 2) return meta.y_domain[0];
+  if (typeof meta?.y_min === "number") return meta.y_min;
+  if (typeof meta?.baseline_zero === "boolean") return meta.baseline_zero ? 0 : "auto";
+
+  // auto: baseline at 0 when all values are non-negative
+  const { min } = seriesMinMax(series);
+  return min >= 0 ? 0 : "auto";
+}
+
+function computeYMax(series, meta) {
+  // hard overrides
+  if (Array.isArray(meta?.y_domain) && meta.y_domain.length === 2) return meta.y_domain[1];
+  if (typeof meta?.y_max === "number") return meta.y_max;
+
+  const stats = seriesMinMax(series);
+  const yLabel = meta?.y_label || "";
+
+  // rate-like scales → cap at 1.0 for clean headroom
+  if (looksLikeRate(yLabel, stats)) return 1.0;
+
+  // OPS/SLG often creep above 1.0 — use 1.2 floor or 10% padded tenth
+  if (looksLikeOpsOrSlg(yLabel)) {
+    const padded = ceilToTenth(Math.max(1.2, stats.max * 1.05));
+    return padded;
+  }
+
+  // counts & everything else → "nice" ceiling with small headroom
+  const padded = stats.max * 1.05; // 5% headroom
+  return niceCeil(padded);
+}
+
+/* ---------------- Presentation ---------------- */
+
 const BRAND_COLORS = [
-  "#2ac9d9", "#7c6cff", "#ffd166", "#33d69f", "#ff6b6b",
-  "#4895ef", "#80ed99", "#a78bfa", "#ef8354", "#06d6a0"
+  "#2ac9d9",
+  "#7c6cff",
+  "#ffd166",
+  "#33d69f",
+  "#ff6b6b",
+  "#4895ef",
+  "#80ed99",
+  "#a78bfa",
+  "#ef8354",
+  "#06d6a0",
 ];
 
 function Shell({ title, children }) {
@@ -30,8 +139,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
   const yLegend = meta?.y_label || "Value";
   const labelMap = meta?.label_map || {};
 
-  // Build a literal-color Nivo theme from current CSS variables.
-  // Using concrete colors (not var(--...)) ensures html-to-image preserves grid/axis lines in PNG exports.
+  // Build a literal-color Nivo theme from current CSS variables
   const theme = useMemo(() => {
     const css = getComputedStyle(document.documentElement);
     const STROKE = (css.getPropertyValue("--stroke") || "#d0d6ea").trim();
@@ -73,7 +181,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
     return null;
   }
 
-  // ---------------- Radar ----------------
+  /* ---------------- Radar ---------------- */
   if (chartType === "radar") {
     const data = Array.isArray(series) ? series : [];
     const prettyData = data.map((row) => {
@@ -82,7 +190,9 @@ export default function ChartRenderer({ chartType, series, meta }) {
       return { ...row, stat: statLabel };
     });
     const allKeys = new Set();
-    prettyData.forEach((row) => Object.keys(row).forEach((k) => k !== "stat" && allKeys.add(k)));
+    prettyData.forEach((row) =>
+      Object.keys(row).forEach((k) => k !== "stat" && allKeys.add(k))
+    );
     const keys = Array.from(allKeys);
 
     return (
@@ -100,16 +210,29 @@ export default function ChartRenderer({ chartType, series, meta }) {
           colors={BRAND_COLORS}
           animate
           motionConfig="gentle"
-          legends={[{ anchor: "bottom", direction: "row", translateY: 40, itemWidth: 100, itemHeight: 16, symbolSize: 10, symbolShape: "circle" }]}
+          legends={[
+            {
+              anchor: "bottom",
+              direction: "row",
+              translateY: 40,
+              itemWidth: 100,
+              itemHeight: 16,
+              symbolSize: 10,
+              symbolShape: "circle",
+            },
+          ]}
           valueFormat={(v) => fmtNumber(v)}
         />
       </Shell>
     );
   }
 
-  // ---------------- Bar ----------------
+  /* ---------------- Bar ---------------- */
   if (chartType === "bar") {
-    const prettySeries = (series || []).map((s) => ({ ...s, id: labelizeId(s.id, labelMap) }));
+    const prettySeries = (series || []).map((s) => ({
+      ...s,
+      id: labelizeId(s.id, labelMap),
+    }));
     const { rows: rawRows, keys } = buildBar(prettySeries);
     const rows = orderRows(rawRows, meta);
     const groupMode = meta?.layout === "stacked" ? "stacked" : "grouped";
@@ -125,11 +248,15 @@ export default function ChartRenderer({ chartType, series, meta }) {
     const tickRotation = rows && rows.length > 8 ? -25 : 0;
 
     // Allocate explicit room for the legend *below* the x-axis text
-    const LEGEND_H = 22;      // legend block height
-    const GAP = 12;           // gap between axis label and legend
-    const AXIS_LABEL = 42;    // axisBottom.legendOffset
+    const LEGEND_H = 22;
+    const GAP = 12;
+    const AXIS_LABEL = 42;
     const TICKS_AREA = tickRotation < 0 ? 34 : 24;
-    const bottomMargin = AXIS_LABEL + TICKS_AREA + LEGEND_H + GAP; // ~100–110px
+    const bottomMargin = AXIS_LABEL + TICKS_AREA + LEGEND_H + GAP;
+
+    // y-domain
+    const yMinBar = computeYMin(prettySeries, meta);
+    const yMaxBar = computeYMax(prettySeries, meta);
 
     return (
       <Shell title={deriveTitle()}>
@@ -144,6 +271,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
           enableGridY
           enableGridX
           valueFormat={(v) => fmtNumber(v)}
+          yScale={{ type: "linear", min: yMinBar, max: yMaxBar }}
           axisBottom={{
             tickSize: 0,
             tickPadding: 10,
@@ -169,7 +297,6 @@ export default function ChartRenderer({ chartType, series, meta }) {
               dataFrom: "keys",
               anchor: "bottom",
               direction: "row",
-              // push the legend down into the extra bottom margin
               translateY: bottomMargin - (LEGEND_H + Math.max(GAP - 4, 6)),
               itemWidth: 110,
               itemHeight: LEGEND_H,
@@ -188,20 +315,26 @@ export default function ChartRenderer({ chartType, series, meta }) {
     );
   }
 
-  // ---------------- Line ----------------
+  /* ---------------- Line ---------------- */
   const categorical = isCategorical(series);
   const seriesForLine = categorical
     ? (series || []).map((s) => ({ ...s, id: labelizeId(s.id, labelMap) }))
     : sortSeriesByX(series).map((s) => ({ ...s, id: labelizeId(s.id, labelMap) }));
 
   const metaYears = Array.isArray(meta?.x_years)
-    ? meta.x_years.map((n) => Number(n)).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b)
+    ? meta.x_years
+        .map((n) => Number(n))
+        .filter((n) => !Number.isNaN(n))
+        .sort((a, b) => a - b)
     : null;
 
   const xstats = categorical ? null : getXStats(seriesForLine);
-  const minX = categorical ? undefined : (metaYears ? metaYears[0] : xstats?.min ?? "auto");
-  const maxX = categorical ? undefined : (metaYears ? metaYears[metaYears.length - 1] : xstats?.max ?? "auto");
-  const tickValues = categorical ? undefined : (metaYears || xstats?.ticks);
+  const minX = categorical ? undefined : metaYears ? metaYears[0] : xstats?.min ?? "auto";
+  const maxX = categorical ? undefined : metaYears ? metaYears[metaYears.length - 1] : xstats?.max ?? "auto";
+  const tickValues = categorical ? undefined : metaYears || xstats?.ticks;
+
+  const yMinLine = computeYMin(seriesForLine, meta);
+  const yMaxLine = computeYMax(seriesForLine, meta);
 
   function BandLayer(props) {
     try {
@@ -213,11 +346,17 @@ export default function ChartRenderer({ chartType, series, meta }) {
       if (!p10 || !p90) return null;
 
       const up = (p90.data || []).map((d) => [d.x, d.y]);
-      const dn = (p10.data || []).slice().reverse().map((d) => [d.x, d.y]);
+      const dn = (p10.data || [])
+        .slice()
+        .reverse()
+        .map((d) => [d.x, d.y]);
       if (!up.length || !dn.length) return null;
 
       const pts = up.concat(dn);
-      const d = pts.map((pt, i) => (i === 0 ? `M ${pt[0]} ${pt[1]}` : `L ${pt[0]} ${pt[1]}`)).join(" ") + " Z";
+      const d =
+        pts
+          .map((pt, i) => (i === 0 ? `M ${pt[0]} ${pt[1]}` : `L ${pt[0]} ${pt[1]}`))
+          .join(" ") + " Z";
       return <path d={d} fill="var(--band-fill, rgba(127,127,127,0.18))" stroke="none" />;
     } catch {
       return null;
@@ -229,7 +368,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
   const LINE_TICKS_AREA = 26;
   const LINE_LEGEND_H = 22;
   const LINE_GAP = 12;
-  const lineBottom = LINE_AXIS_LABEL + LINE_TICKS_AREA + LINE_LEGEND_H + LINE_GAP; // ~104px
+  const lineBottom = LINE_AXIS_LABEL + LINE_TICKS_AREA + LINE_LEGEND_H + LINE_GAP;
 
   return (
     <Shell title={deriveTitle()}>
@@ -238,7 +377,7 @@ export default function ChartRenderer({ chartType, series, meta }) {
         theme={theme}
         margin={{ top: 20, right: 28, bottom: lineBottom, left: 56 }}
         xScale={categorical ? { type: "point" } : { type: "linear", min: minX, max: maxX }}
-        yScale={{ type: "linear", min: "auto", max: "auto" }}
+        yScale={{ type: "linear", min: yMinLine, max: yMaxLine }}
         curve="monotoneX"
         enablePoints
         pointSize={7}
@@ -285,11 +424,24 @@ export default function ChartRenderer({ chartType, series, meta }) {
           return (
             <div style={{ padding: 6 }}>
               <div style={{ fontWeight: 600 }}>{String(seriesId)}</div>
-              <div>{String(x)}: {fmtNumber(y)}</div>
+              <div>
+                {String(x)}: {fmtNumber(y)}
+              </div>
             </div>
           );
         }}
-        layers={["grid", "markers", "axes", BandLayer, "areas", "lines", "points", "slices", "mesh", "legends"]}
+        layers={[
+          "grid",
+          "markers",
+          "axes",
+          BandLayer,
+          "areas",
+          "lines",
+          "points",
+          "slices",
+          "mesh",
+          "legends",
+        ]}
       />
     </Shell>
   );

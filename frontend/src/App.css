@@ -519,13 +519,13 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, .chip:focu
 .pop-item.danger:hover { background: rgb(255,240,241); border-color: rgba(255,107,107,0.55); }
 @keyframes popIn { from { opacity: 0; transform: translateY(-50%) scale(0.96);} to { opacity: 1; transform: translateY(-50%) scale(1);} }
 
-/* === Force charts to 4:3 on page (main + facets) === */
+/* Force charts to 4:3 on page (main + facets) */
 .chart-box {
   width: 100%;
   aspect-ratio: 4 / 3;   /* <-- the key line */
-  height: auto;          /* let aspect-ratio compute height from width */
-  max-height: 60vh;      /* optional: don't overrun short screens */
-  min-height: 280px;     /* optional: keep usable height on phones */
+  height: auto;
+  max-height: 60vh;
+  min-height: 280px;
 }
 
 /* Faceted charts should use the same ratio */

@@ -1,22 +1,17 @@
 # backend/app/agent/nl2sql.py
-
 """
-Schema-aware NL → SQL for Sabermetric AI
+Schema-aware NL → SQL for Sabermetric AI (with dynamic schema + analyst aliases)
 
-Supports:
-- Filters & joins across: batting_stats, player_profiles, player_features, player_seasons
-- Year alignment rules (features & seasons require player_id AND year)
-- OPS computed as (on_base_percent + slg_percent) AS on_base_plus_slg
-- SELECT-only, single statement, LIMIT cap, table whitelist
-
-PLUS:
-- MLB Rule 9.22: auto-qualify RATE stat leaderboards by adding a PA threshold
-  when the prompt implies a single-season rate leaderboard (e.g., "highest OPS in 2023").
-- Position cleanup: when the X-axis is a position field, exclude "TWP"/"Two-Way Player",
-  the aggregate "OF", and utility buckets like "IF"/"UTIL".
+Key features:
+- Reflects real DB columns (batting_stats, player_profiles, player_features, player_seasons).
+- Provides an alias catalog (baseball-analyst phrases → canonical DB columns), filtered to
+  only include columns present in *your* database. Also includes reverse mappings from your
+  human labels (stat_label) back to columns.
+- Prefer safe, single SELECT statements. Adds MLB Rule 9.22 qualification for single-year
+  rate leaderboards. Cleans up position buckets on "by position" charts.
 
 Returns canonical payload:
-  { chart_type, series, narration, meta? }
+  { chart_type, series, narration, meta }
 compatible with your chart renderer.
 """
 
@@ -77,47 +72,190 @@ def buildCatalog(db):
         "player_features": reflectTableColumns(db, "player_features"),
         "player_seasons": reflectTableColumns(db, "player_seasons"),
     }
+    # Ensure virtual OPS is available to the planner even if not a physical column
     if "on_base_plus_slg" not in catalog["batting_stats"]:
         catalog["batting_stats"] = sorted(set(catalog["batting_stats"]) | {"on_base_plus_slg"})
     return catalog
 
 
-def buildSchemaPrompt(catalog):
+# ----------------------- Analyst aliasing -----------------------
+# Curated, analyst-friendly phrases → canonical columns (lowercased keys).
+# These will be filtered against the *actual* columns present in your DB.
+ALIAS_BASE = {
+    # Core rate/average
+    "ops": "on_base_plus_slg",
+    "on-base plus slugging": "on_base_plus_slg",
+    "slugging %": "slg_percent",
+    "slugging percentage": "slg_percent",
+    "slg": "slg_percent",
+    "obp": "on_base_percent",
+    "on-base %": "on_base_percent",
+    "on-base percentage": "on_base_percent",
+    "avg": "batting_avg",
+    "ba": "batting_avg",
+    "batting average": "batting_avg",
+    "woba": "woba",
+    "xwoba": "xwoba",
+    "wobacon": "wobacon",
+    "xwobacon": "xwobacon",
+    "xslg": "xslg",
+    "xobp": "xobp",
+    "xba": "xba",
+    "xiso": "xiso",
+    "iso": "isolated_power",
+    "babip": "babip",
+
+    # Plate discipline
+    "k%": "k_percent",
+    "k pct": "k_percent",
+    "strikeout %": "k_percent",
+    "strikeout percentage": "k_percent",
+    "bb%": "bb_percent",
+    "walk %": "bb_percent",
+    "walk rate": "bb_percent",
+    "whiff %": "whiff_percent",
+    "whiff rate": "whiff_percent",
+    "swing %": "swing_percent",
+    "z-swing %": "z_swing_percent",
+    "z-whiff %": "z_swing_miss_percent",
+    "o-swing %": "oz_swing_percent",
+    "o-whiff %": "oz_swing_miss_percent",
+    "o-contact %": "oz_contact_percent",
+    "z-contact %": "iz_contact_percent",
+    "first-pitch strike %": "f_strike_percent",
+    "meatball %": "meatball_percent",
+    "meatball swing %": "meatball_swing_percent",
+
+    # Batted-ball quality
+    "hard-hit %": "hard_hit_percent",
+    "sweet-spot %": "sweet_spot_percent",
+    "barrel %": "barrel_batted_rate",
+    "pull %": "pull_percent",
+    "opposite %": "opposite_percent",
+    "straightaway %": "straightaway_percent",
+    "groundball %": "groundballs_percent",
+    "flyball %": "flyballs_percent",
+    "line-drive %": "linedrives_percent",
+    "popup %": "popups_percent",
+    "exit velocity": "exit_velocity_avg",
+    "avg exit velocity": "exit_velocity_avg",
+    "launch angle": "launch_angle_avg",
+    "avg launch angle": "launch_angle_avg",
+
+    # Counting stats (batting)
+    "hr": "home_run",
+    "home runs": "home_run",
+    "homers": "home_run",
+    "rbi": "b_rbi",
+    "rbis": "b_rbi",
+    "runs batted in": "b_rbi",
+    "hits": "hit",
+    "singles": "single",
+    "doubles": "double",
+    "triples": "triple",
+    "walks": "walk",
+    "strikeouts": "strikeout",
+    "total bases": "b_total_bases",
+    "hbp": "b_hit_by_pitch",
+
+    # Baserunning
+    "sb": "r_total_stolen_base",
+    "steals": "r_total_stolen_base",
+    "stolen bases": "r_total_stolen_base",
+    "caught stealing": "r_total_caught_stealing",
+    "sprint speed": "sprint_speed",
+
+    # Defense / Statcast fielding
+    "oaa": "n_outs_above_average",
+
+    # Position / meta
+    "position": "primary_position",
+}
+
+def _normalize_key(s: str) -> str:
+    # Very light normalization for keys used in alias matching.
+    return " ".join((s or "").lower().replace("%", " % ").split())
+
+def _reverse_human_labels_to_columns(db, cols):
+    """
+    Build reverse map from *human* labels (stat_label) back to canonical column names.
+    - Includes exact label (lowercased)
+    - Includes a relaxed variant with '%' compacted
+    """
+    rev = {}
+    for c in cols:
+        human = stat_label(c)  # from your toolkit
+        if not human:
+            continue
+        k1 = _normalize_key(human)
+        rev[k1] = c
+        # Also support compacted percent spelling and common shorthands
+        k2 = _normalize_key(human.replace(" %", "%"))
+        rev.setdefault(k2, c)
+        # A few obvious acronyms to be safe
+        if human.lower() == "home runs":
+            rev.setdefault("hr", c)
+        if human.lower() == "rbis":
+            rev.setdefault("rbi", c)
+    return rev
+
+def buildAliasCatalog(db, catalog):
+    """
+    Combine curated analyst aliases with human label inversions,
+    filter to present columns, and return a dict {phrase -> column}.
+    """
+    cols = set(catalog.get("batting_stats") or [])
+    # curated, filtered
+    aliases = {k: v for k, v in ALIAS_BASE.items() if v in cols}
+    # human label reverse map
+    aliases.update(_reverse_human_labels_to_columns(db, cols))
+    return aliases
+
+
+# ----------------------- Prompt builder -----------------------
+def buildSchemaPrompt(db, catalog, alias_catalog):
     def joinColumns(table_name):
         columns = ", ".join(sorted(catalog.get(table_name, [])))
         return f"{table_name}({columns})"
     schema_lines = [joinColumns(t) for t in ALLOWED_TABLES]
     schema_block = "\n".join(schema_lines)
 
-    return f"""
-You write ONE safe Postgres SELECT over these tables; alias projected fields to simple names:
+    alias_block = json.dumps(alias_catalog, ensure_ascii=False, indent=2)
 
+    return f"""
+You are a SQL planner for MLB batting data. You write ONE safe Postgres SELECT using ONLY the allowed tables/columns below.
+Always use exact column names from this schema. When the user uses analyst terms, translate them using the alias map.
+
+SCHEMA (allowed tables and columns):
 {schema_block}
 
-Join rules:
+STAT ALIASES (natural language → column name):
+{alias_block}
+
+Join & alignment rules:
 - ALWAYS join on player_id when combining tables.
-- If joining player_features or player_seasons with batting_stats, also join on year
-  (i.e., both player_id AND year). Example:
+- If joining player_features or player_seasons with batting_stats, also join on year (both player_id AND year).
+  Example:
     FROM batting_stats b
     JOIN player_features f ON f.player_id = b.player_id AND f.year = b.year
 - player_profiles is per-player; join on player_id only.
 - Compute OPS as (on_base_percent + slg_percent) AS on_base_plus_slg when needed.
 
 Constraints:
-- Output JSON only, no prose.
-- SELECT-only. No DDL/DML.
-- Reference only these tables and their columns.
-- Alias columns used in the response to simple names that match your JSON "x"/"y".
-- If user gives a single year: WHERE <table>.year = YYYY.
-- For ranges: WHERE <table>.year BETWEEN Y1 AND Y2.
-- When ranking, include ORDER BY and LIMIT (default LIMIT 50 if user doesn't say).
-- Chart types: choose "bar" (categorical x) or "line" (time series).
+- Output JSON only (no prose), with exactly these keys: sql, x, y, chart_type, assumptions.
+- SELECT-only, single statement (no UNION/CTE/DDL/DML).
+- Use only allowed tables/columns listed above.
+- Alias projected fields to simple names that match your JSON "x"/"y".
+- Single year: WHERE <table>.year = YYYY
+- Range: WHERE <table>.year BETWEEN Y1 AND Y2
+- Ranking: include ORDER BY and LIMIT (default LIMIT 50 if user doesn't say)
+- Chart types: choose "bar" (categorical x) or "line" (time series)
 - If the prompt names a SINGLE PLAYER and a YEAR RANGE, return a per-year time series:
   SELECT b.year AS year, <stat> AS value
   FROM batting_stats b
   WHERE b.full_name ILIKE '%<player>%' AND b.year BETWEEN Y1 AND Y2
   ORDER BY year ASC;
-  Use chart_type="line". Do NOT aggregate, do NOT ORDER BY the value, and do NOT LIMIT.
+  Use chart_type="line". Do NOT aggregate or LIMIT.
 
 Return JSON:
 {{
@@ -130,9 +268,12 @@ Return JSON:
 """.strip()
 
 
-def fewshotMessages(catalog, user_text):
+def fewshotMessages(db, catalog, alias_catalog, user_text):
+    system_prompt = buildSchemaPrompt(db, catalog, alias_catalog)
     return [
-        {"role": "system", "content": buildSchemaPrompt(catalog)},
+        {"role": "system", "content": system_prompt},
+
+        # Simple leaderboard — demonstrates alias usage (HR)
         {"role": "user", "content": "Top 10 home run hitters in 2024"},
         {"role": "assistant", "content": json.dumps({
             "sql": (
@@ -143,6 +284,8 @@ def fewshotMessages(catalog, user_text):
             ),
             "x": "name", "y": "home_run", "chart_type": "bar", "assumptions": ""
         })},
+
+        # Analyst phrasing: OPS + position filter + sort tie-break
         {"role": "user", "content": "Left-handed batters with OPS above .850 in 2024, sort by HR desc, top 15"},
         {"role": "assistant", "content": json.dumps({
             "sql": (
@@ -155,6 +298,8 @@ def fewshotMessages(catalog, user_text):
             "x": "name", "y": ["on_base_plus_slg","home_run"], "chart_type": "bar",
             "assumptions": "OPS = OBP + SLG."
         })},
+
+        # Per-season line for multiple players using features (aligned joins)
         {"role": "user", "content": "Show 2019–2021 average wOBA_3yr for José Ramírez and Rafael Devers"},
         {"role": "assistant", "content": json.dumps({
             "sql": (
@@ -168,6 +313,8 @@ def fewshotMessages(catalog, user_text):
             "x": "year", "y": "woba_3yr", "chart_type": "line",
             "assumptions": "Aligned features by player_id AND year."
         })},
+
+        # Position grouping example
         {"role": "user", "content": "Compare 3B vs SS OPS in 2023 for players with >= 300 PA"},
         {"role": "assistant", "content": json.dumps({
             "sql": (
@@ -181,7 +328,8 @@ def fewshotMessages(catalog, user_text):
             "x": "pos", "y": "on_base_plus_slg", "chart_type": "bar",
             "assumptions": "OPS = OBP + SLG; grouped by position."
         })},
-        # NEW: steer single-player + range to a per-year time series (no SUM/LIMIT).
+
+        # Steer single-player + range to clean per-year line (alias: 'slugging %' → slg_percent)
         {"role": "user", "content": "judge slugging % from 2022 to 2025"},
         {"role": "assistant", "content": json.dumps({
             "sql": (
@@ -192,12 +340,15 @@ def fewshotMessages(catalog, user_text):
             ),
             "x": "year", "y": "slg_percent", "chart_type": "line", "assumptions": ""
         })},
+
+        # The actual user prompt (optionally with a canonical_stats hint appended)
         {"role": "user", "content": user_text},
     ]
 
 
 def llmNl2sqlPlan(db, text):
     catalog = buildCatalog(db)
+    alias_catalog = buildAliasCatalog(db, catalog)
     client = getLlmClient()
     if client is None:
         return {
@@ -210,10 +361,19 @@ def llmNl2sqlPlan(db, text):
             "assumptions": "LLM unavailable; default HR leaderboard."
         }
 
+    # Lightweight hinting: if the prompt contains aliased phrases, surface canonical stats
+    tnorm = _normalize_key(text)
+    matched = []
+    for phrase, col in alias_catalog.items():
+        if phrase and phrase in tnorm:
+            matched.append(col)
+    matched = sorted({m for m in matched})
+    user_msg = text if not matched else f"{text}\n\n[canonical_stats={','.join(matched)}]"
+
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
         response_format={"type": "json_object"},
-        messages=fewshotMessages(catalog, text),
+        messages=fewshotMessages(db, catalog, alias_catalog, user_msg),
         temperature=0.0,
     )
     raw_text = (response.choices[0].message.content or "{}").strip()
@@ -594,50 +754,51 @@ def analystNounFor(stat_slug):
 
 def buildSummary(chart_type, series, x_key, y_key, prompt_text):
     """
-    Produce a single-sentence conclusion about what's shown.
-    Examples:
-      "DH had the highest OPS for 2025 at 0.803."
-      "RF and DH tied for the highest OPS for 2025 at 0.803."
+    Single-sentence conclusion that considers ALL series (not just the first).
     """
-    # Determine primary stat
+    # primary stat name
     if isinstance(y_key, str):
         stat_slug = y_key
     elif isinstance(y_key, list) and y_key:
         stat_slug = y_key[0]
     else:
         stat_slug = None
-
     stat_name = analystNounFor(stat_slug) if stat_slug else "value"
 
-    # No data?
-    if not series or not series[0].get("data"):
+    # flatten all points with their series id
+    all_pts = []
+    for s in (series or []):
+        sid = s.get("id")
+        for p in (s.get("data") or []):
+            if p.get("y") is None:
+                continue
+            try:
+                all_pts.append({"id": sid, "x": p.get("x"), "y": float(p["y"])})
+            except Exception:
+                pass
+
+    if not all_pts:
         return "No results."
 
-    points = [p for p in series[0]["data"] if p.get("y") is not None]
-    if not points:
-        return "No results."
+    # highest value across all series/years
+    best = max(all_pts, key=lambda r: r["y"])
+    leaders = [r for r in all_pts if abs(r["y"] - best["y"]) <= 1e-12]
+    names = sorted({str(r["id"]) for r in leaders if r.get("id")}) or [str(best.get("x"))]
 
-    # Find leaders (handle ties)
-    max_val = max(float(p["y"]) for p in points)
-    eps = 1e-12
-    leaders = [str(p["x"]) for p in points if abs(float(p["y"]) - max_val) <= eps]
-
-    # Year phrase from the prompt
     years = extractYearsFromText(prompt_text)
     if len(years) == 1:
-        year_phrase = f" for {years[0]}"
+        yr_phrase = f" for {years[0]}"
     elif len(years) >= 2:
-        year_phrase = f" for {years[0]}–{years[-1]}"
+        yr_phrase = f" for {years[0]}–{years[-1]}"
     else:
-        year_phrase = ""
+        yr_phrase = ""
 
-    value_text = formatNumberShort(max_val)
-
-    if len(leaders) == 1:
-        return f"{leaders[0]} had the highest {stat_name}{year_phrase} at {value_text}."
+    val_txt = formatNumberShort(best["y"])
+    if len(names) == 1:
+        who = names[0]
+        return f"{who} posted the highest {stat_name}{yr_phrase} at {val_txt}."
     else:
-        leaders_text = ", ".join(leaders)
-        return f"{leaders_text} tied for the highest {stat_name}{year_phrase} at {value_text}."
+        return f"{', '.join(names)} tied for the highest {stat_name}{yr_phrase} at {val_txt}."
 
 
 # ----------------------- Execute & shape -----------------------
@@ -702,29 +863,60 @@ def run_nl2sql(db, text):
         except Exception:
             return None
 
-    series = []
-    if isinstance(y_key, list):
-        for ycol in y_key:
+    # --- NEW: if the rows include a player name and X is year/season, build one series per player ---
+    name_key = None
+    if rows and isinstance(rows[0], dict):
+        for cand in ("name", "full_name", "player", "player_name"):
+            if cand in rows[0]:
+                name_key = cand
+                break
+
+    is_year_axis = str(x_key or "").lower() in ("year", "season")
+
+    if name_key and is_year_axis and isinstance(y_key, str):
+        groups = {}
+        for row in rows:
+            nm = row.get(name_key)
+            xv = row.get(x_key)
+            yf = toFloat(row.get(y_key))
+            if nm is None or xv is None or yf is None:
+                continue
+            groups.setdefault(nm, {})
+            groups[nm][xv] = {"x": xv, "y": yf}
+
+        series = []
+        for nm, by_year in groups.items():
+            ordered = sorted(by_year.values(), key=lambda p: p["x"])
+            series.append({"id": nm, "data": ordered})
+
+        meta = {
+            "title": buildTitle(text, x_key, y_key, sql),
+            "y_label": stat_label(y_key),
+        }
+    else:
+        # existing single/multi-y logic
+        series = []
+        if isinstance(y_key, list):
+            for ycol in y_key:
+                points = []
+                for row in rows:
+                    xv = row.get(x_key)
+                    yf = toFloat(row.get(ycol))
+                    if xv is not None and yf is not None:
+                        points.append({"x": xv, "y": yf})
+                series.append({"id": ycol, "data": points})
+            meta = {"label_map": label_map_for(y_key), "title": buildTitle(text, x_key, y_key, sql)}
+        else:
             points = []
             for row in rows:
                 xv = row.get(x_key)
-                yf = toFloat(row.get(ycol))
+                yf = toFloat(row.get(y_key))
                 if xv is not None and yf is not None:
                     points.append({"x": xv, "y": yf})
-            series.append({"id": ycol, "data": points})
-        meta = {"label_map": label_map_for(y_key), "title": buildTitle(text, x_key, y_key, sql)}
-    else:
-        points = []
-        for row in rows:
-            xv = row.get(x_key)
-            yf = toFloat(row.get(y_key))
-            if xv is not None and yf is not None:
-                points.append({"x": xv, "y": yf})
-        series = [{"id": y_key, "data": points}]
-        meta = {"label_map": label_map_for([y_key]), "title": buildTitle(text, x_key, y_key, sql)}
-
-    if isinstance(y_key, str) and y_key:
-        meta["y_label"] = stat_label(y_key)
+            series = [{"id": y_key, "data": points}]
+            meta = {"label_map": label_map_for([y_key]), "title": buildTitle(text, x_key, y_key, sql)}
+            if isinstance(y_key, str) and y_key:
+                meta["y_label"] = stat_label(y_key)
 
     if qualificationInfo:
         meta["qualifier"] = qualificationInfo
@@ -741,7 +933,7 @@ def run_nl2sql(db, text):
         prompt_text=text,
     )
     if assumptions:
-        # You asked for a conclusion-only summary, so we do not append assumptions.
+        # keep summary short; assumptions available if needed for debugging
         pass
 
     return {
@@ -751,5 +943,5 @@ def run_nl2sql(db, text):
         "meta": meta,
     }
 
-# Example usage:
+# Example:
 # result = run_nl2sql(db, "Top 10 home run hitters in 2024")
