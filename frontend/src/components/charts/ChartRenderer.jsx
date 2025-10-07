@@ -1,5 +1,5 @@
 // frontend/src/components/charts/ChartRenderer.jsx
-import React, { useMemo } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 import { ResponsiveLine } from "@nivo/line";
 import { ResponsiveBar } from "@nivo/bar";
 import { ResponsiveRadar } from "@nivo/radar";
@@ -13,24 +13,7 @@ import {
   labelizeId,
 } from "../../utils/labels";
 
-/* ---------- Y-axis helpers (quant-friendly defaults) ----------
-
-Override knobs you can send from the backend inside `meta`:
-- meta.y_min: number       → hard minimum
-- meta.y_max: number       → hard maximum
-- meta.y_domain: [min,max] → hard domain
-- meta.baseline_zero: bool → force 0 baseline when true
-
-Auto rules if not explicitly set:
-- If all y ≥ 0 → min = 0 (baseline at 0).
-- If values look like rates (≤ 1.05) OR y_label mentions '%'/'rate'/AVG/OBP/wOBA:
-    • max = 1.0
-- If y_label mentions OPS or SLG:
-    • max = max(1.2, ceil(1.05*maxData, to 0.1))
-- Otherwise:
-    • max = a "nice" ceiling slightly above the data (1/2/5 × 10^k).
----------------------------------------------------------------- */
-
+/* ---------- Y-axis helpers (quant-friendly defaults) ---------- */
 function seriesMinMax(series) {
   let min = Infinity;
   let max = -Infinity;
@@ -47,20 +30,16 @@ function seriesMinMax(series) {
   if (max === -Infinity) max = 0;
   return { min, max };
 }
-
 function looksLikeRate(yLabel, { min, max }) {
   const t = String(yLabel || "").toLowerCase();
   if (t.includes("%") || t.includes("rate")) return true;
   if (/\b(avg|ba|obp|woba|xwoba|xba|xobp|iso|babip)\b/i.test(t)) return true;
-  // data-driven hint
   return max <= 1.05 && min >= 0;
 }
-
 function looksLikeOpsOrSlg(yLabel) {
   const t = String(yLabel || "").toLowerCase();
   return t.includes("ops") || t.includes("slg");
 }
-
 function niceCeil(n) {
   if (!Number.isFinite(n) || n <= 0) return 1;
   const exp = Math.floor(Math.log10(n));
@@ -73,46 +52,31 @@ function niceCeil(n) {
   else step = 10;
   return step * base;
 }
-
 function ceilToTenth(n) {
   return Math.ceil(n * 10) / 10;
 }
-
 function computeYMin(series, meta) {
-  // hard overrides
   if (Array.isArray(meta?.y_domain) && meta.y_domain.length === 2) return meta.y_domain[0];
   if (typeof meta?.y_min === "number") return meta.y_min;
   if (typeof meta?.baseline_zero === "boolean") return meta.baseline_zero ? 0 : "auto";
-
-  // auto: baseline at 0 when all values are non-negative
   const { min } = seriesMinMax(series);
   return min >= 0 ? 0 : "auto";
 }
-
 function computeYMax(series, meta) {
-  // hard overrides
   if (Array.isArray(meta?.y_domain) && meta.y_domain.length === 2) return meta.y_domain[1];
   if (typeof meta?.y_max === "number") return meta.y_max;
-
   const stats = seriesMinMax(series);
   const yLabel = meta?.y_label || "";
-
-  // rate-like scales → cap at 1.0 for clean headroom
   if (looksLikeRate(yLabel, stats)) return 1.0;
-
-  // OPS/SLG often creep above 1.0 — use 1.2 floor or 10% padded tenth
   if (looksLikeOpsOrSlg(yLabel)) {
     const padded = ceilToTenth(Math.max(1.2, stats.max * 1.05));
     return padded;
   }
-
-  // counts & everything else → "nice" ceiling with small headroom
-  const padded = stats.max * 1.05; // 5% headroom
+  const padded = stats.max * 1.05;
   return niceCeil(padded);
 }
 
 /* ---------------- Presentation ---------------- */
-
 const BRAND_COLORS = [
   "#2ac9d9",
   "#7c6cff",
@@ -126,6 +90,49 @@ const BRAND_COLORS = [
   "#06d6a0",
 ];
 
+/* ---------- reactive theme-vars reader ---------- */
+function readVars() {
+  const css = getComputedStyle(document.documentElement);
+  const get = (k, fallback) => (css.getPropertyValue(k) || "").trim() || fallback;
+  return {
+    TEXT: get("--text", "#0d1220"),
+    STROKE: get("--stroke", "rgba(10,20,40,0.16)"),
+    TBG: get("--tooltip-bg", "#ffffff"),
+  };
+}
+function useThemeVars() {
+  const [vars, setVars] = useState(readVars());
+
+  useEffect(() => {
+    const handle = () => setVars(readVars());
+
+    // Watch <html data-theme="...">
+    const obs = new MutationObserver(handle);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+    // Watch OS light/dark flips
+    let mql;
+    try {
+      mql = window.matchMedia("(prefers-color-scheme: light)");
+      mql.addEventListener?.("change", handle);
+      mql.addListener?.(handle); // Safari fallback
+    } catch {}
+
+    // Mobile orientation/resize quirks
+    window.addEventListener("resize", handle);
+
+    return () => {
+      obs.disconnect();
+      if (mql?.removeEventListener) mql.removeEventListener("change", handle);
+      if (mql?.removeListener) mql.removeListener(handle);
+      window.removeEventListener("resize", handle);
+    };
+  }, []);
+
+  return vars;
+}
+
+/* ---------------- Shell ---------------- */
 function Shell({ title, children }) {
   return (
     <div className="chart-surface">
@@ -138,14 +145,11 @@ function Shell({ title, children }) {
 export default function ChartRenderer({ chartType, series, meta }) {
   const yLegend = meta?.y_label || "Value";
   const labelMap = meta?.label_map || {};
+  const { TEXT, STROKE, TBG } = useThemeVars();
 
-  // Build a literal-color Nivo theme from current CSS variables
-  const theme = useMemo(() => {
-    const css = getComputedStyle(document.documentElement);
-    const STROKE = (css.getPropertyValue("--stroke") || "#d0d6ea").trim();
-    const TEXT = (css.getPropertyValue("--text") || "#0d1220").trim();
-    const TBG = (css.getPropertyValue("--tooltip-bg") || "#ffffff").trim();
-    return {
+  // Build a theme from CURRENT CSS tokens (updates on theme/OS changes)
+  const theme = useMemo(
+    () => ({
       textColor: TEXT,
       fontSize: 12,
       axis: {
@@ -165,8 +169,9 @@ export default function ChartRenderer({ chartType, series, meta }) {
           boxShadow: "var(--shadow)",
         },
       },
-    };
-  }, []);
+    }),
+    [TEXT, STROKE, TBG]
+  );
 
   function deriveTitle() {
     if (meta?.title) return meta.title;
@@ -289,7 +294,8 @@ export default function ChartRenderer({ chartType, series, meta }) {
           }}
           labelSkipHeight={14}
           labelSkipWidth={14}
-          labelTextColor="var(--text)"
+          /* IMPORTANT: use computed hex, not var(--text) */
+          labelTextColor={TEXT}
           colors={BRAND_COLORS}
           borderColor={{ from: "color", modifiers: [["darker", 1.4]] }}
           legends={[
@@ -363,7 +369,6 @@ export default function ChartRenderer({ chartType, series, meta }) {
     }
   }
 
-  // extra bottom space for legend under the x-axis label
   const LINE_AXIS_LABEL = 44;
   const LINE_TICKS_AREA = 26;
   const LINE_LEGEND_H = 22;

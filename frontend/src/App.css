@@ -525,8 +525,11 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, .chip:focu
   aspect-ratio: 4 / 3;   /* <-- the key line */
   height: auto;
   max-height: 60vh;
-  min-height: 280px;
+  min-height: 280px;.chart-box { color: var(--text); }
+.chart-box svg text { fill: currentColor !important; }   /* iOS Safari-safe */
 }
+.chart-box { color: var(--text); }
+.chart-box svg text { fill: currentColor !important; }   /* iOS Safari-safe */
 
 /* Faceted charts should use the same ratio */
 .facet-card .chart-box {
