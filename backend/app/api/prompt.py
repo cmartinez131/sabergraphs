@@ -13,6 +13,8 @@ from ..agent.prompt import (  # classic agent pipeline (planner → toolkit)
     normalize_stat,              # new import for alias-aware normalization
 )
 from ..toolkit.stats import career_arc, compare_players_by_season, stat_label
+from ..agent.is_baseball_prompt import is_baseball_prompt
+
 
 router = APIRouter(prefix="/api", tags=["prompt"])
 
@@ -93,6 +95,16 @@ async def prompt_endpoint(request: Request, db=Depends(get_db)):
     text = (body or {}).get("text")
     if not text or not isinstance(text, str):
         raise HTTPException(status_code=400, detail="Provide 'text' field (string).")
+    
+    # ---- Non-baseball prompts: return graceful empty payload ----
+    if not is_baseball_prompt(text):
+        return {
+            "chart_type": "bar",
+            "series": [{"id": "empty", "data": []}],
+            "narration": "Please enter a baseball query.",
+            "meta": {"title": "No baseball data"}
+        }
+
 
     qp = request.query_params
     route = (qp.get("route") or "auto").lower()

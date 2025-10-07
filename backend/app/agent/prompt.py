@@ -62,6 +62,13 @@ OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # -------------------- Human-readable labels --------------------
 STAT_LABELS = dict(TOOLKIT_LABELS)
+# Prefer batting stat meanings for lowercase 1b/2b/3b in titles (avoid position names)
+STAT_LABELS.update({
+    "1b": "Singles",
+    "2b": "Doubles",
+    "3b": "Triples",
+})
+
 
 def _supported_stats(db):
     """
@@ -466,6 +473,19 @@ def fewshot_messages(allowed_stats, user_text: str):
             "tool": "compare",
             "args": {"players": ["José Ramírez", "Rafael Devers"], "stat": "on_base_plus_slg", "year": 2024}
         })},
+        # Teach multi-stat parsing for 1b/2b/3b/hr specifically
+        {"role": "user", "content": "compare Aaron Judge and Juan Soto 1b, 2b, 3b, hr in 2025"},
+        {"role": "assistant", "content": json.dumps({
+            "tool": "compare_multi",
+            "args": {
+                "players": ["Aaron Judge", "Juan Soto"],
+                "stats": ["single", "double", "triple", "home_run"],
+                "year": 2025,
+                "mode": "players_by_stat",
+                "layout": "grouped"
+            }
+        })},
+        
         {"role": "user", "content": user_text},
     ]
 
@@ -1133,6 +1153,39 @@ def narration_from_plan(db, plan):
     return "AI summary unavailable."
 
 
+# -------------------- Utility: multi-stat extraction (no regex) --------------------
+def extract_stats_list_from_text(db, text: str) -> list[str]:
+    """
+    Pick out a list of stats from free text (comma/and separated),
+    normalize to canonical slugs, and keep only valid columns.
+    No regex used.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    # Lowercase, collapse whitespace
+    t = " ".join(text.lower().split())
+    # Replace ' and ' with commas to unify separators
+    t = t.replace(" and ", ",")
+    # Split on commas
+    raw_parts = [p.strip() for p in t.split(",") if p.strip()]
+    # Some inputs may have space-separated lists without commas; keep single words only
+    parts = []
+    for p in raw_parts:
+        if " " in p:
+            # keep simple one/two-token fragments that are likely stats (e.g., "home runs")
+            # We'll rely on normalize_stat to accept/reject them.
+            parts.extend([q.strip() for q in p.split() if q.strip()])
+        else:
+            parts.append(p)
+    # Normalize and deduplicate in-order
+    out, seen = [], set()
+    for p in parts:
+        s = normalize_stat(db, p)
+        if s and s not in seen:
+            out.append(s); seen.add(s)
+    return out
+
+
 # -------------------- Public entry point --------------------
 def run_prompt(db, text, debug=False):
     plan, source = llm_plan_from_text(db, text)
@@ -1168,10 +1221,39 @@ def run_prompt(db, text, debug=False):
         cols = _supported_stats(db)
         if (not current) or (current not in cols) or same_family(current, hint):
             args["stat"] = hint
-        # If user provided 'stats' list but it's empty and we have a hint, seed it.
         elif "stats" in args and not args.get("stats"):
             args["stats"] = [hint]
+
+    # apply the same-family upgrade to multi-stat lists (e.g., SLG/OBP → OPS when the text says OPS)
+    if hint and isinstance(args.get("stats"), list) and args["stats"]:
+        upgraded = []
+        seen = set()
+        for s in args["stats"]:
+            s2 = hint if same_family(s, hint) else s
+            if s2 not in seen:
+                upgraded.append(s2); seen.add(s2)
+        args["stats"] = upgraded
+        plan["args"] = args
     # ------------------------------------------------------------------
+
+    # --- rescue: if the user clearly lists multiple stats, force compare_multi
+    auto_stats = extract_stats_list_from_text(db, text)
+    if len(auto_stats) >= 2:
+        if tool == "compare":
+            args = {
+                "players": args.get("players") or args.get("player_ids"),
+                "stats": auto_stats,
+                "year": args.get("year"),
+                "start_year": args.get("start_year"),
+                "end_year": args.get("end_year"),
+                "mode": args.get("mode") or "players_by_stat",
+                "layout": args.get("layout") or "grouped",
+            }
+            plan = {"tool": "compare_multi", "args": args}
+            tool = "compare_multi"
+        elif tool == "compare_multi" and not (args.get("stats") or []):
+            args["stats"] = auto_stats
+            plan["args"] = args
 
     # ---- normalize planner quirks: single-stat 'compare_multi' → 'compare' ----
     if tool == "compare_multi":
