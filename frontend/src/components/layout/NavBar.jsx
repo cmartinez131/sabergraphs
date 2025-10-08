@@ -120,9 +120,14 @@ export default function NavBar({
             ☰
           </button>
         )}
-        <button className="brand-home" onClick={handleBrandClick} title="New chat (Home)" type="button">
+        <button
+          className="brand-home"
+          onClick={handleBrandClick}
+          title="SaberGraphs"
+          type="button"
+        >
           <div className="logo">⚾︎</div>
-          <span className="brand-title">sabermetric ai</span>
+          <span className="brand-title">SaberGraphs</span>
         </button>
       </div>
 
