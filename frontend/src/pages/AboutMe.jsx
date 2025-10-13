@@ -1,6 +1,14 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import "../App.css";
+import NavBar from "../components/layout/NavBar";
+
+function toggleTheme() {
+  const next =
+    document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem("theme", next);
+}
 
 export default function AboutMe() {
     const navigate = useNavigate();
@@ -15,24 +23,8 @@ export default function AboutMe() {
                 <div className="grain" />
             </div>
 
-            {/* Minimal nav (no Pricing here) */}
-            <header className="nav glass">
-                <div className="brand">
-                    <button
-                        className="brand-home"
-                        onClick={() => navigate("/")}
-                        title="Back to Sabermetric AI"
-                    >
-                        <div className="logo">⚾︎</div>
-                        <span className="brand-title">Sabermetric ai</span>
-                    </button>
-                </div>
-                <div className="nav-actions">
-                    <Link className="btn ghost small" to="/">Home</Link>
-                    <button className="btn light small" type="button">Log in</button>
-                    <button className="btn primary small" type="button">Sign up for free</button>
-                </div>
-            </header>
+            {/* Minimal nav */}
+            <NavBar onToggleTheme={toggleTheme} />
 
             <main className="container pricing">
                 {/* Hero */}
