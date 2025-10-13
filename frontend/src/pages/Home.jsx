@@ -492,7 +492,7 @@ async function exportPNG({ mode = "screen", size = 1200 } = {}) {
                 onChange={(e) => setQuery(e.target.value)}
                 aria-label="Ask Sabermetric AI"
               />
-              <button className="btn primary" type="submit">Ask AI</button>
+              <button className="btn primary" type="submit">Ask</button>
             </form>
 
             <div className="chip-groups">
@@ -582,7 +582,7 @@ async function exportPNG({ mode = "screen", size = 1200 } = {}) {
             aria-label="Ask Sabermetric AI"
           />
           <button className="btn primary" type="submit" disabled={loading}>
-            {loading ? "Analyzing…" : "Ask AI"}
+            {loading ? "Analyzing…" : "Ask"}
           </button>
         </form>
       )}
