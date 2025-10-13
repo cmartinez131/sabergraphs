@@ -152,14 +152,7 @@ export default function Home() {
         "Compare Carroll, Witt Jr., and Tatis Jr. sprint speed in 2024",
         "Compare Lindor and Marte on steals from 2020 to 2025",
         "Stanton and Soto slugging % from 2021 to 2025",
-        "luisangel acuna and ronald acuna jr slugging % from 2022 to 2025",
-      ],
-      "Project future stats": [
-        "Forecast Aaron Judge OPS for the next 6 years",
-        "Estimate Shohei Ohtani HR for the next 3 years",
-        "Forecast Juan Soto SLG for the next 3 years",
-        "Project Elly De La Cruz stolen bases over the next 4 years",
-        "Over the next 5 years, project Julio Rodríguez HR",
+        // "luisangel acuna and ronald acuna jr slugging % from 2022 to 2025",
       ],
       "Get stat leaderboards and rankings": [
         "Hit by pitch leaders 2017–2019 (sum)",
@@ -181,6 +174,13 @@ export default function Home() {
         "Judge whiff % 2018 to 2025",
         "Mookie Betts batting average from 2016 to 2025",
         "Kris Bryant batting average from 2016 to 2025",
+      ],
+      "Project future stats": [
+        "Forecast Aaron Judge OPS for the next 6 years",
+        "Estimate Shohei Ohtani HR for the next 3 years",
+        "Forecast Juan Soto SLG for the next 3 years",
+        "Project Elly De La Cruz stolen bases over the next 4 years",
+        "Over the next 5 years, project Julio Rodríguez HR",
       ],
       "Look up a single stat": [
         "Shohei Ohtani OPS in 2024",
