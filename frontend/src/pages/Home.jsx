@@ -230,7 +230,7 @@ export default function Home() {
           conversation_id: null, // ← force new conversation
         });
         await loadRecent();
-      } catch {}
+      } catch { }
     }, 800);
   }
 
@@ -318,52 +318,52 @@ export default function Home() {
 
   /* ---------- Exports ---------- */
   // inside Home.jsx
-async function exportPNG({ mode = "screen", size = 1200 } = {}) {
-  if (!chartNodeRef.current) return;
+  async function exportPNG({ mode = "screen", size = 1200 } = {}) {
+    if (!chartNodeRef.current) return;
 
-  // Capture just the chart area (title + chart), or facet grid
-  const selector = chartType === "facet" ? ".facet-grid" : ".chart-surface";
-  const node = chartNodeRef.current.querySelector(selector) || chartNodeRef.current;
+    // Capture just the chart area (title + chart), or facet grid
+    const selector = chartType === "facet" ? ".facet-grid" : ".chart-surface";
+    const node = chartNodeRef.current.querySelector(selector) || chartNodeRef.current;
 
-  const rect = node.getBoundingClientRect();
-  let W = rect.width, H = rect.height;
-  const style = {
-    width: `${rect.width}px`,
-    height: `${rect.height}px`,
-    margin: 0,
-    padding: 0,
-    transformOrigin: "top left",
-  };
+    const rect = node.getBoundingClientRect();
+    let W = rect.width, H = rect.height;
+    const style = {
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      margin: 0,
+      padding: 0,
+      transformOrigin: "top left",
+    };
 
-  if (mode === "square-stretch") {
-    // Fill a square by stretching X and Y independently
-    W = H = size;
-    style.transform = `scale(${W / rect.width}, ${H / rect.height})`;
-  } else if (mode === "square-pad") {
-    // Keep aspect, center inside a square (letterbox)
-    W = H = size;
-    const s = Math.min(W / rect.width, H / rect.height);
-    const offX = (W - rect.width * s) / 2;
-    const offY = (H - rect.height * s) / 2;
-    style.transform = `translate(${offX}px, ${offY}px) scale(${s})`;
+    if (mode === "square-stretch") {
+      // Fill a square by stretching X and Y independently
+      W = H = size;
+      style.transform = `scale(${W / rect.width}, ${H / rect.height})`;
+    } else if (mode === "square-pad") {
+      // Keep aspect, center inside a square (letterbox)
+      W = H = size;
+      const s = Math.min(W / rect.width, H / rect.height);
+      const offX = (W - rect.width * s) / 2;
+      const offY = (H - rect.height * s) / 2;
+      style.transform = `translate(${offX}px, ${offY}px) scale(${s})`;
+    }
+
+    try {
+      const dataUrl = await toPng(node, {
+        width: W,
+        height: H,
+        style,
+        backgroundColor: "#ffffff",
+        cacheBust: true,
+        pixelRatio: 2,
+      });
+      const base = sanitizeFileName(meta?.title || "sabermetric_ai_chart");
+      downloadURL(dataUrl, `${base}.png`);
+    } catch (e) {
+      console.error("PNG export failed", e);
+      alert("PNG export failed (see console).");
+    }
   }
-
-  try {
-    const dataUrl = await toPng(node, {
-      width: W,
-      height: H,
-      style,          
-      backgroundColor: "#ffffff",
-      cacheBust: true,
-      pixelRatio: 2,
-    });
-    const base = sanitizeFileName(meta?.title || "sabermetric_ai_chart");
-    downloadURL(dataUrl, `${base}.png`);
-  } catch (e) {
-    console.error("PNG export failed", e);
-    alert("PNG export failed (see console).");
-  }
-}
 
 
   function exportCSV() {
@@ -419,7 +419,7 @@ async function exportPNG({ mode = "screen", size = 1200 } = {}) {
               setQuery(last.prompt || "");
               window.scrollTo({ top: 0, behavior: "smooth" });
             })
-            .catch(() => {});
+            .catch(() => { });
         }}
         onDeleteConversation={async (id) => {
           // Optimistic: remove immediately, then confirm with server
@@ -439,9 +439,9 @@ async function exportPNG({ mode = "screen", size = 1200 } = {}) {
       {/* Navbar */}
       <NavBar
         onToggleTheme={toggleTheme}
-        onOpenSidebar={() => { 
-          setSidebarOpen(true); 
-          loadRecent(); 
+        onOpenSidebar={() => {
+          setSidebarOpen(true);
+          loadRecent();
         }}
         onHomeClick={resetUI}
       />
@@ -455,19 +455,44 @@ async function exportPNG({ mode = "screen", size = 1200 } = {}) {
               <br />
               <span className="accent">See data. Get insights.</span>
             </h1>
-            <p className="sub">Natural language → analytics, projections, and beautiful charts.</p>
+            {/* <p className="sub">Natural language → analytics, projections, and beautiful charts.</p> */}
 
             <div className="status-row">
-              <div className="status-card glass">
-                <h2>Getting started</h2>
-                <ul className="bullets">
-                  <li>Ask a baseball question (e.g., “Who hit the most home runs from 2020 to 2025?”) or click starter prompt below.</li>
-                  <li>Compare players (e.g., “Judge vs Soto HR 2025”).</li>
-                  <li>Query for projections (e.g., “Estimate Judge OPS for the next 5 years”).</li>
-                  <li>Available stats: AB, PA, H, 1B/2B/3B, HR, SO, BB, K%, BB%, AVG, SLG, OBP, OPS, RBI, LOB, TB, HBP, GIDP, called strikes, swinging strikes, and more</li>
-                  <li>Export results as CSV file or PNG image of the chart.</li>
-                </ul>
+              <div className="status-card glass getting-started">
+                <div className="gs-head">
+                  <h2>Getting started</h2>
+                </div>
+
+                <div className="gs-steps">
+                  <div className="step">
+                    <div className="step-icon">🔎</div>
+                    <div className="step-body">
+                      <div className="step-title">Ask</div>
+                      <div className="step-copy">Type a baseball question.</div>
+                    </div>
+                  </div>
+
+                  <div className="step">
+                    <div className="step-icon">📈</div>
+                    <div className="step-body">
+                      <div className="step-title">Explore</div>
+                      <div className="step-copy">Fetch data and render the right chart automatically.</div>
+                    </div>
+                  </div>
+
+                  <div className="step">
+                    <div className="step-icon">⬇️</div>
+                    <div className="step-body">
+                      <div className="step-title">Export</div>
+                      <div className="step-copy">Download the chart as PNG or the data as CSV.</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="gs-foot muted">
+                  Stats supported: AB, PA, H, 1B/2B/3B, HR, SO, BB, K%, BB%, AVG, SLG, OBP, OPS, RBI, HBP, GIDP, called & swinging strikes, and more.
+                </div>
               </div>
+
 
               <div className="status-card glass">
                 <h2>Service Status</h2>
@@ -478,7 +503,9 @@ async function exportPNG({ mode = "screen", size = 1200 } = {}) {
                     <StatusPill label={backendLabel} state={backendState} />
                   </div>
                   <div className="row"><span>Database</span><StatusPill label="Running" state="ok" /></div>
-                  <p className="muted" style={{ marginTop: 8 }}>*Only 2015-2025 batter data available</p>
+                  <p className="muted status-footnote">
+                    *Only 2015-2025 batter data available
+                  </p>
                 </div>
               </div>
             </div>
