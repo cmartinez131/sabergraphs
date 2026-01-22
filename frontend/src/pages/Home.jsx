@@ -72,7 +72,7 @@ export default function Home() {
   const [chartSummary, setChartSummary] = useState("");
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [theme, setTheme] = useState(document.documentElement.dataset.theme || "dark");
+  const [, setTheme] = useState(document.documentElement.dataset.theme || "dark");
 
   // Server-backed conversations list
   const [conversations, setConversations] = useState([]);

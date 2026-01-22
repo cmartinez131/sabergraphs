@@ -1,5 +1,4 @@
 import React from "react";
-import { Link, useNavigate } from "react-router-dom";
 import "../App.css";
 import NavBar from "../components/layout/NavBar";
 
@@ -11,8 +10,6 @@ function toggleTheme() {
 }
 
 export default function AboutMe() {
-    const navigate = useNavigate();
-
     return (
         <div className="pricing-page">
             <div className="bg">

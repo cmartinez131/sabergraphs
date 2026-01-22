@@ -19,7 +19,7 @@ function formatCsvCell(v) {
 }
 
 export function sanitizeFileName(s) {
-  return String(s || "chart").replace(/[^\w\d\-]+/g, "_").slice(0, 80);
+  return String(s || "chart").replace(/[^\w\d-]+/g, "_").slice(0, 80);
 }
 
 export function downloadURL(url, filename) {

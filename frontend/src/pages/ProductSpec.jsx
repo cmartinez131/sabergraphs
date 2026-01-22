@@ -1,5 +1,4 @@
 import React from "react";
-import { Link, useNavigate } from "react-router-dom";
 import "../App.css";
 import NavBar from "../components/layout/NavBar";
 
@@ -11,8 +10,6 @@ function toggleTheme() {
 }
 
 export default function ProductSpec() {
-  const navigate = useNavigate();
-
   return (
     <div className="pricing-page">
       <div className="bg">
@@ -60,7 +57,7 @@ export default function ProductSpec() {
 
           <h3>Current Scope</h3>
           <p>
-            Batting stats from 2015–2025. Pitching, defense, and live data coming soon.
+            Batting stats from 2015—2025. Pitching, defense, and live data coming soon.
           </p>
 
           <h3>Roadmap</h3>
