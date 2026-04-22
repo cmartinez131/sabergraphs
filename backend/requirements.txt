@@ -6,6 +6,6 @@ pandas
 numpy
 httpx
 pytest
-openai
+anthropic
 scikit-learn
 requests

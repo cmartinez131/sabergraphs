@@ -35,7 +35,10 @@ export default function ProductSpec() {
 
           <h3>Architecture</h3>
           <pre style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
-{`Prompt → Agent picks tool → Query Postgres → Return chart data → Render with Nivo`}
+{`Prompt → Agent (Claude) → Query Postgres → Return chart data → Render with Nivo
+            ↓
+  Two paths: NL→SQL (direct SQL generation)
+         or Classic (tool-picker → analytics function)`}
           </pre>
 
           <h3>Stack</h3>
@@ -43,7 +46,7 @@ export default function ProductSpec() {
             <li><b>Frontend</b>: React, Nivo (charts), Vercel</li>
             <li><b>Backend</b>: FastAPI, SQLAlchemy, Render</li>
             <li><b>Database</b>: PostgreSQL (Neon)</li>
-            <li><b>AI</b>: OpenAI API</li>
+            <li><b>AI</b>: Anthropic Claude API</li>
           </ul>
 
           <h3>What You Can Ask</h3>

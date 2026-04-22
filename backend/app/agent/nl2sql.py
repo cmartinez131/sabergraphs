@@ -1,19 +1,4 @@
-# backend/app/agent/nl2sql.py
-"""
-Schema-aware NL → SQL for Sabermetric AI (with dynamic schema + analyst aliases)
-
-Key features:
-- Reflects real DB columns (batting_stats, player_profiles, player_features, player_seasons).
-- Provides an alias catalog (baseball-analyst phrases → canonical DB columns), filtered to
-  only include columns present in *your* database. Also includes reverse mappings from your
-  human labels (stat_label) back to columns.
-- Prefer safe, single SELECT statements. Adds MLB Rule 9.22 qualification for single-year
-  rate leaderboards. Cleans up position buckets on "by position" charts.
-
-Returns canonical payload:
-  { chart_type, series, narration, meta }
-compatible with your chart renderer.
-"""
+"""Schema-aware NL → SQL pipeline. Returns { chart_type, series, narration, meta }."""
 
 import os
 import json
@@ -22,8 +7,6 @@ from sqlalchemy import text as sa_text
 from sqlalchemy import inspect as sa_inspect
 
 from ..toolkit.stats import table_columns, label_map_for
-from ..db.models import BattingStats
-
 from ..toolkit.stats import (
     stat_label,
     is_rate_stat,
@@ -32,12 +15,12 @@ from ..toolkit.stats import (
 )
 
 try:
-    from openai import OpenAI  # type: ignore
+    import anthropic  # type: ignore
 except Exception:
-    OpenAI = None
+    anthropic = None  # type: ignore
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 ALLOWED_TABLES = {
     "batting_stats",
@@ -47,16 +30,16 @@ ALLOWED_TABLES = {
 }
 
 # ----------------------- LLM wrapper -----------------------
-def getLlmClient():
-    if not OPENAI_API_KEY or OpenAI is None:
+def get_llm_client():
+    if not ANTHROPIC_API_KEY or anthropic is None:
         return None
     try:
-        return OpenAI(api_key=OPENAI_API_KEY)
+        return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     except Exception:
         return None
 
 
-def reflectTableColumns(db, table_name):
+def reflect_table_columns(db, table_name):
     try:
         inspector = sa_inspect(db.bind)
         columns = inspector.get_columns(table_name)
@@ -65,12 +48,12 @@ def reflectTableColumns(db, table_name):
         return []
 
 
-def buildCatalog(db):
+def build_catalog(db):
     catalog = {
         "batting_stats": sorted(table_columns(db)),
-        "player_profiles": reflectTableColumns(db, "player_profiles"),
-        "player_features": reflectTableColumns(db, "player_features"),
-        "player_seasons": reflectTableColumns(db, "player_seasons"),
+        "player_profiles": reflect_table_columns(db, "player_profiles"),
+        "player_features": reflect_table_columns(db, "player_features"),
+        "player_seasons": reflect_table_columns(db, "player_seasons"),
     }
     # Ensure virtual OPS is available to the planner even if not a physical column
     if "on_base_plus_slg" not in catalog["batting_stats"]:
@@ -79,8 +62,6 @@ def buildCatalog(db):
 
 
 # ----------------------- Analyst aliasing -----------------------
-# Curated, analyst-friendly phrases → canonical columns (lowercased keys).
-# These will be filtered against the *actual* columns present in your DB.
 ALIAS_BASE = {
     # Core rate/average
     "ops": "on_base_plus_slg",
@@ -175,47 +156,35 @@ ALIAS_BASE = {
 }
 
 def _normalize_key(s: str) -> str:
-    # Very light normalization for keys used in alias matching.
     return " ".join((s or "").lower().replace("%", " % ").split())
 
 def _reverse_human_labels_to_columns(db, cols):
-    """
-    Build reverse map from *human* labels (stat_label) back to canonical column names.
-    - Includes exact label (lowercased)
-    - Includes a relaxed variant with '%' compacted
-    """
+    """Build reverse map from human labels (stat_label) back to canonical column names."""
     rev = {}
     for c in cols:
-        human = stat_label(c)  # from your toolkit
+        human = stat_label(c)
         if not human:
             continue
         k1 = _normalize_key(human)
         rev[k1] = c
-        # Also support compacted percent spelling and common shorthands
         k2 = _normalize_key(human.replace(" %", "%"))
         rev.setdefault(k2, c)
-        # A few obvious acronyms to be safe
         if human.lower() == "home runs":
             rev.setdefault("hr", c)
         if human.lower() == "rbis":
             rev.setdefault("rbi", c)
     return rev
 
-def buildAliasCatalog(db, catalog):
-    """
-    Combine curated analyst aliases with human label inversions,
-    filter to present columns, and return a dict {phrase -> column}.
-    """
+def build_alias_catalog(db, catalog):
+    """Build alias catalog filtered to present DB columns."""
     cols = set(catalog.get("batting_stats") or [])
-    # curated, filtered
     aliases = {k: v for k, v in ALIAS_BASE.items() if v in cols}
-    # human label reverse map
     aliases.update(_reverse_human_labels_to_columns(db, cols))
     return aliases
 
 
 # ----------------------- Prompt builder -----------------------
-def buildSchemaPrompt(db, catalog, alias_catalog):
+def build_schema_prompt(db, catalog, alias_catalog):
     def joinColumns(table_name):
         columns = ", ".join(sorted(catalog.get(table_name, [])))
         return f"{table_name}({columns})"
@@ -270,8 +239,8 @@ Return JSON:
 """.strip()
 
 
-def fewshotMessages(db, catalog, alias_catalog, user_text):
-    system_prompt = buildSchemaPrompt(db, catalog, alias_catalog)
+def fewshot_messages(db, catalog, alias_catalog, user_text):
+    system_prompt = build_schema_prompt(db, catalog, alias_catalog)
     return [
         {"role": "system", "content": system_prompt},
 
@@ -343,15 +312,14 @@ def fewshotMessages(db, catalog, alias_catalog, user_text):
             "x": "year", "y": "slg_percent", "chart_type": "line", "assumptions": ""
         })},
 
-        # The actual user prompt (optionally with a canonical_stats hint appended)
         {"role": "user", "content": user_text},
     ]
 
 
-def llmNl2sqlPlan(db, text):
-    catalog = buildCatalog(db)
-    alias_catalog = buildAliasCatalog(db, catalog)
-    client = getLlmClient()
+def llm_nl2sql_plan(db, text):
+    catalog = build_catalog(db)
+    alias_catalog = build_alias_catalog(db, catalog)
+    client = get_llm_client()
     if client is None:
         return {
             "sql": (
@@ -372,18 +340,20 @@ def llmNl2sqlPlan(db, text):
     matched = sorted({m for m in matched})
     user_msg = text if not matched else f"{text}\n\n[canonical_stats={','.join(matched)}]"
 
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        response_format={"type": "json_object"},
-        messages=fewshotMessages(db, catalog, alias_catalog, user_msg),
+    all_messages = fewshot_messages(db, catalog, alias_catalog, user_msg)
+    response = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=1024,
+        system=all_messages[0]["content"],
+        messages=all_messages[1:],
         temperature=0.0,
     )
-    raw_text = (response.choices[0].message.content or "{}").strip()
+    raw_text = (response.content[0].text or "{}").strip()
     return json.loads(raw_text)
 
 
 # ----------------------- String helpers (no regex) -----------------------
-def stripSqlComments(sql):
+def strip_sql_comments(sql):
     if not isinstance(sql, str):
         return ""
     index = 0
@@ -430,11 +400,11 @@ def stripSqlComments(sql):
     return "".join(output_chars)
 
 
-def lstripLower(s):
+def lstrip_lower(s):
     return (s or "").lstrip().lower()
 
 
-def tokenizeIdentifiers(sql):
+def tokenize_identifiers(sql):
     tokens, current = [], []
     for ch in sql:
         if ch.isalnum() or ch == "_":
@@ -448,7 +418,7 @@ def tokenizeIdentifiers(sql):
 
 
 # ----------------------- MLB pa/qual helpers (no regex) -----------------------
-def extractYearsFromText(text):
+def extract_years_from_text(text):
     years_found, digits = [], ""
     for ch in str(text or ""):
         if ch.isdigit():
@@ -472,8 +442,8 @@ def extractYearsFromText(text):
     return years_found
 
 
-def injectMinPaCondition(sql, pa_column, min_pa):
-    sql_string = stripSqlComments(sql).rstrip()
+def inject_min_pa_condition(sql, pa_column, min_pa):
+    sql_string = strip_sql_comments(sql).rstrip()
     hadSemicolon = sql_string.endswith(";")
     if hadSemicolon:
         sql_string = sql_string[:-1]
@@ -506,19 +476,19 @@ _DENY_KEYWORDS = {
 def is_safe_select(sql):
     if not isinstance(sql, str):
         return False
-    sql_no_comments = stripSqlComments(sql)
-    if not lstripLower(sql_no_comments).startswith("select"):
+    sql_no_comments = strip_sql_comments(sql)
+    if not lstrip_lower(sql_no_comments).startswith("select"):
         return False
     if sql_no_comments.count(";") > 1:
         return False
-    tokens = [t.lower() for t in tokenizeIdentifiers(sql_no_comments)]
+    tokens = [t.lower() for t in tokenize_identifiers(sql_no_comments)]
     for token in tokens:
         if token in _DENY_KEYWORDS:
             return False
     return True
 
 
-def nextWord(s, start_index):
+def next_word(s, start_index):
     length = len(s)
     i = start_index
     while i < length and s[i].isspace():
@@ -533,19 +503,19 @@ def nextWord(s, start_index):
     return "".join(buffer_chars)
 
 
-def tablesInFromJoin(sql):
-    lowered = stripSqlComments(sql).lower()
+def tables_in_from_join(sql):
+    lowered = strip_sql_comments(sql).lower()
     tables = []
     index = 0
     length = len(lowered)
     while index < length:
         if index + 5 <= length and lowered[index:index+5] == " from ":
-            name = nextWord(lowered, index + 5)
+            name = next_word(lowered, index + 5)
             if name:
                 tables.append(name.split(".")[-1])
             index += 5
         elif index + 6 <= length and lowered[index:index+6] == " join ":
-            name = nextWord(lowered, index + 6)
+            name = next_word(lowered, index + 6)
             if name:
                 tables.append(name.split(".")[-1])
             index += 6
@@ -559,9 +529,9 @@ def tablesInFromJoin(sql):
     return unique_tables
 
 
-def whitelistSql(sql, allowed_tables):
-    lowered = stripSqlComments(sql).lower()
-    used_tables = tablesInFromJoin(lowered)
+def whitelist_sql(sql, allowed_tables):
+    lowered = strip_sql_comments(sql).lower()
+    used_tables = tables_in_from_join(lowered)
     if not used_tables:
         raise ValueError("Query must reference at least one table.")
     for t in used_tables:
@@ -578,13 +548,13 @@ def whitelistSql(sql, allowed_tables):
         raise ValueError("System schemas are not allowed.")
 
 
-def enforceLimit(sql, max_rows=200):
-    sql_clean = stripSqlComments(sql).strip()
+def enforce_limit(sql, max_rows=200):
+    sql_clean = strip_sql_comments(sql).strip()
     hasSemicolon = sql_clean.endswith(";")
     if hasSemicolon:
         sql_clean = sql_clean[:-1].rstrip()
 
-    tokens = tokenizeIdentifiers(sql_clean)
+    tokens = tokenize_identifiers(sql_clean)
     lowercase_tokens = [t.lower() for t in tokens]
     limit_index = None
     for i, token in enumerate(lowercase_tokens):
@@ -618,7 +588,7 @@ def enforceLimit(sql, max_rows=200):
 
 
 # ----------------------- Position filtering helpers -----------------------
-def filterDisallowedPositions(rows, x_key):
+def filter_disallowed_positions(rows, x_key):
     disallowed = {"OF", "TWP", "TWO-WAY PLAYER", "TWO WAY PLAYER", "IF", "UTIL"}
     kept_rows = []
     removed_count = 0
@@ -632,7 +602,7 @@ def filterDisallowedPositions(rows, x_key):
 
 
 # ----------------------- Title & narration helpers -----------------------
-def formatNumberShort(value):
+def format_number_short(value):
     try:
         number = float(value)
     except Exception:
@@ -646,7 +616,7 @@ def formatNumberShort(value):
     return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
-def detectContextFromPrompt(text):
+def detect_context_from_prompt(text):
     t = (text or "").lower()
     context = {}
     if "left" in t or "lefty" in t or "lefties" in t or "bats l" in t:
@@ -663,9 +633,9 @@ def detectContextFromPrompt(text):
     return context
 
 
-def parseLimitFromSql(sql):
-    no_comments = stripSqlComments(sql)
-    tokens = tokenizeIdentifiers(no_comments)
+def parse_limit_from_sql(sql):
+    no_comments = strip_sql_comments(sql)
+    tokens = tokenize_identifiers(no_comments)
     lowercase_tokens = [t.lower() for t in tokens]
     for i, token in enumerate(lowercase_tokens):
         if token == "limit" and i + 1 < len(tokens):
@@ -676,8 +646,8 @@ def parseLimitFromSql(sql):
     return None
 
 
-def parseOrderDirectionFromSql(sql):
-    lowered = stripSqlComments(sql).lower()
+def parse_order_direction_from_sql(sql):
+    lowered = strip_sql_comments(sql).lower()
     idx = lowered.find(" order by ")
     if idx == -1:
         return "desc"
@@ -689,7 +659,7 @@ def parseOrderDirectionFromSql(sql):
     return "desc"
 
 
-def formatYearSpan(years_list):
+def format_year_span(years_list):
     if not years_list:
         return ""
     if len(years_list) == 1:
@@ -697,7 +667,7 @@ def formatYearSpan(years_list):
     return f"{years_list[0]}–{years_list[1]}"
 
 
-def buildTitle(text, x_key, y_key, sql):
+def build_title(text, x_key, y_key, sql):
     if isinstance(y_key, str) and y_key:
         y_label = stat_label(y_key)
     elif isinstance(y_key, list) and y_key:
@@ -705,11 +675,11 @@ def buildTitle(text, x_key, y_key, sql):
     else:
         y_label = None
 
-    years_list = extractYearsFromText(text)
-    year_part = formatYearSpan(years_list)
-    context = detectContextFromPrompt(text)
-    limit_value = parseLimitFromSql(sql)
-    order_direction = parseOrderDirectionFromSql(sql)
+    years_list = extract_years_from_text(text)
+    year_part = format_year_span(years_list)
+    context = detect_context_from_prompt(text)
+    limit_value = parse_limit_from_sql(sql)
+    order_direction = parse_order_direction_from_sql(sql)
 
     parts = []
 
@@ -740,7 +710,7 @@ def buildTitle(text, x_key, y_key, sql):
     return " — ".join([p for p in parts if p])
 
 
-def analystNounFor(stat_slug):
+def analyst_noun_for(stat_slug):
     if stat_slug == "home_run":
         return "HR"
     if stat_slug == "on_base_plus_slg":
@@ -754,20 +724,16 @@ def analystNounFor(stat_slug):
     return stat_label(stat_slug)
 
 
-def buildSummary(chart_type, series, x_key, y_key, prompt_text):
-    """
-    Single-sentence conclusion that considers ALL series (not just the first).
-    """
-    # primary stat name
+def build_summary(chart_type, series, x_key, y_key, prompt_text):
+    """Single-sentence conclusion that considers ALL series (not just the first)."""
     if isinstance(y_key, str):
         stat_slug = y_key
     elif isinstance(y_key, list) and y_key:
         stat_slug = y_key[0]
     else:
         stat_slug = None
-    stat_name = analystNounFor(stat_slug) if stat_slug else "value"
+    stat_name = analyst_noun_for(stat_slug) if stat_slug else "value"
 
-    # flatten all points with their series id
     all_pts = []
     for s in (series or []):
         sid = s.get("id")
@@ -782,12 +748,11 @@ def buildSummary(chart_type, series, x_key, y_key, prompt_text):
     if not all_pts:
         return "No results."
 
-    # highest value across all series/years
     best = max(all_pts, key=lambda r: r["y"])
     leaders = [r for r in all_pts if abs(r["y"] - best["y"]) <= 1e-12]
     names = sorted({str(r["id"]) for r in leaders if r.get("id")}) or [str(best.get("x"))]
 
-    years = extractYearsFromText(prompt_text)
+    years = extract_years_from_text(prompt_text)
     if len(years) == 1:
         yr_phrase = f" for {years[0]}"
     elif len(years) >= 2:
@@ -795,7 +760,7 @@ def buildSummary(chart_type, series, x_key, y_key, prompt_text):
     else:
         yr_phrase = ""
 
-    val_txt = formatNumberShort(best["y"])
+    val_txt = format_number_short(best["y"])
     if len(names) == 1:
         who = names[0]
         return f"{who} posted the highest {stat_name}{yr_phrase} at {val_txt}."
@@ -805,7 +770,7 @@ def buildSummary(chart_type, series, x_key, y_key, prompt_text):
 
 # ----------------------- Execute & shape -----------------------
 def run_nl2sql(db, text):
-    plan = llmNl2sqlPlan(db, text)
+    plan = llm_nl2sql_plan(db, text)
 
     sql = str(plan.get("sql") or "").strip()
     if not sql:
@@ -814,10 +779,10 @@ def run_nl2sql(db, text):
     if not is_safe_select(sql):
         raise ValueError("Unsafe SQL; only single SELECT statements are allowed.")
 
-    whitelistSql(sql, ALLOWED_TABLES)
-    sql = enforceLimit(sql, 200)
+    whitelist_sql(sql, ALLOWED_TABLES)
+    sql = enforce_limit(sql, 200)
 
-    years_list = extractYearsFromText(text)
+    years_list = extract_years_from_text(text)
     single_year_for_qualification = years_list[0] if len(years_list) == 1 else None
 
     y_key = plan.get("y")
@@ -830,7 +795,7 @@ def run_nl2sql(db, text):
     qualificationInfo = None
     if single_year_for_qualification is not None and wantsRateQualification and plateAppearanceColumnName:
         min_pa = _qualified_pa_threshold(int(single_year_for_qualification))
-        sql = injectMinPaCondition(sql, plateAppearanceColumnName, min_pa)
+        sql = inject_min_pa_condition(sql, plateAppearanceColumnName, min_pa)
         qualificationInfo = {
             "min_pa": int(min_pa),
             "pa_column": plateAppearanceColumnName,
@@ -850,14 +815,14 @@ def run_nl2sql(db, text):
             "chart_type": "bar",
             "series": [{"id": "empty", "data": []}],
             "narration": "No results.",
-            "meta": {"title": buildTitle(text, plan.get("x"), plan.get("y"), sql)}
+            "meta": {"title": build_title(text, plan.get("x"), plan.get("y"), sql)}
         }
 
     xKeyLowercase = (str(x_key or "")).lower()
     looksLikePositionXAxis = xKeyLowercase in ("pos", "position", "primary_position")
     removedPositions = 0
     if looksLikePositionXAxis:
-        rows, removedPositions = filterDisallowedPositions(rows, x_key)
+        rows, removedPositions = filter_disallowed_positions(rows, x_key)
 
     def toFloat(value):
         try:
@@ -865,7 +830,7 @@ def run_nl2sql(db, text):
         except Exception:
             return None
 
-    # --- NEW: if the rows include a player name and X is year/season, build one series per player ---
+    # if the rows include a player name and X is year/season, build one series per player
     name_key = None
     if rows and isinstance(rows[0], dict):
         for cand in ("name", "full_name", "player", "player_name"):
@@ -892,11 +857,10 @@ def run_nl2sql(db, text):
             series.append({"id": nm, "data": ordered})
 
         meta = {
-            "title": buildTitle(text, x_key, y_key, sql),
+            "title": build_title(text, x_key, y_key, sql),
             "y_label": stat_label(y_key),
         }
     else:
-        # existing single/multi-y logic
         series = []
         if isinstance(y_key, list):
             for ycol in y_key:
@@ -907,7 +871,7 @@ def run_nl2sql(db, text):
                     if xv is not None and yf is not None:
                         points.append({"x": xv, "y": yf})
                 series.append({"id": ycol, "data": points})
-            meta = {"label_map": label_map_for(y_key), "title": buildTitle(text, x_key, y_key, sql)}
+            meta = {"label_map": label_map_for(y_key), "title": build_title(text, x_key, y_key, sql)}
         else:
             points = []
             for row in rows:
@@ -916,7 +880,7 @@ def run_nl2sql(db, text):
                 if xv is not None and yf is not None:
                     points.append({"x": xv, "y": yf})
             series = [{"id": y_key, "data": points}]
-            meta = {"label_map": label_map_for([y_key]), "title": buildTitle(text, x_key, y_key, sql)}
+            meta = {"label_map": label_map_for([y_key]), "title": build_title(text, x_key, y_key, sql)}
             if isinstance(y_key, str) and y_key:
                 meta["y_label"] = stat_label(y_key)
 
@@ -927,16 +891,13 @@ def run_nl2sql(db, text):
         meta.setdefault("filters", {})
         meta["filters"]["positions_excluded"] = ["OF", "TWP", "IF", "UTIL"]
 
-    narration = buildSummary(
+    narration = build_summary(
         chart_type=chart_type,
         series=series,
         x_key=x_key,
         y_key=y_key,
         prompt_text=text,
     )
-    if assumptions:
-        # keep summary short; assumptions available if needed for debugging
-        pass
 
     return {
         "chart_type": chart_type,
@@ -944,6 +905,3 @@ def run_nl2sql(db, text):
         "narration": narration,
         "meta": meta,
     }
-
-# Example:
-# result = run_nl2sql(db, "Top 10 home run hitters in 2024")

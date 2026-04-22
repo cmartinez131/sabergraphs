@@ -37,8 +37,8 @@ services:
     environment:
       # Pass the database credentials to the backend
       - DATABASE_URL=${DATABASE_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=gpt-4o-mini
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-6}
       - PYTHONPATH=/app
     # This command tells the container what to run on startup. THIS IS THE FIX.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

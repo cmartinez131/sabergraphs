@@ -4,9 +4,10 @@
 Type a question, get a Nivo chart back. The stack is simple & robust:
 
 ```
-Frontend → Backend (endpoint) → Toolkit → DB
-           ↑                          ↓
-        Agent (LLM) ←— optional —→  Toolkit shapes series → Backend returns canonical payload → Frontend renders Nivo
+Frontend → POST /api/prompt → Agent → Toolkit → DB → canonical payload → Frontend renders Nivo
+                                 ↓
+               Two paths: NL→SQL (direct SQL generation)
+                       or Classic (tool-picker → toolkit function)
 ```
 
 ---
@@ -17,7 +18,7 @@ Frontend → Backend (endpoint) → Toolkit → DB
 * “Project Ortiz wOBA next season” → simple **projection** from trailing seasons.
 * Leaderboards, career arcs, rolling means, histograms, percentiles, improvement deltas.
 * **Canonical chart payload**: `{ chart_type, series, narration }` that the frontend renders with Nivo.
-* Optional LLM agent to parse free-text; **no LLM required** (there’s a lightweight fallback).
+* Optional Claude agent to parse free-text via two paths — NL→SQL or classic tool-picker; **no LLM required** (lightweight rule-based fallback included).
 
 > You’re reading an active WIP. The “what-if” scenario engine + richer projections land in Phase 3 (see roadmap).
 
@@ -28,7 +29,7 @@ Frontend → Backend (endpoint) → Toolkit → DB
 * **Backend**: FastAPI, SQLAlchemy
 * **Frontend**: React + Nivo
 * **DB**: PostgreSQL
-* **AI (optional)**: OpenAI (you can ship with the rules-based fallback)
+* **AI (optional)**: Anthropic Claude (you can ship with the rules-based fallback)
 * **DevOps**: Docker & Docker Compose
 * **Data**: A wide CSV (2015-2024 batting stats) → Postgres
 
@@ -41,8 +42,7 @@ Frontend → Backend (endpoint) → Toolkit → DB
 |-- backend/
 |   |-- app/
 |   |   |-- api/          # FastAPI endpoints (analytics + prompt)
-|   |   |-- agent/        # LLM planner (optional); rule fallback built in
-|   |   |-- core/         # config
+|   |   |-- agent/        # Claude planner (nl2sql + classic tool-picker); rule fallback built in
 |   |   |-- db/           # SQLAlchemy models & session
 |   |   |-- ml_models/    # saved models (future)
 |   |   |-- simulation/   # what-if engine (future)
@@ -164,7 +164,7 @@ curl -s -X POST http://localhost:8000/api/leaderboard \
 
 ### Prompt (free text → agent → toolkit)
 
-> If you set `OPENAI_API_KEY`, the agent uses an LLM; otherwise it falls back to simple rules.
+> If you set `ANTHROPIC_API_KEY`, the agent uses Claude to parse prompts; otherwise it falls back to rule-based parsing.
 
 ```bash
 curl -s -X POST "http://localhost:8000/api/prompt?debug=1" \
@@ -199,10 +199,10 @@ curl -s -X POST "http://localhost:8000/api/prompt?debug=1" \
 
 Backend reads these (via Docker env or shell):
 
-* `DATABASE_URL` – inside containers it’s like `postgresql+psycopg2://postgres:postgres@db:5432/postgres`
+* `DATABASE_URL` – inside containers: `postgresql+psycopg2://user:password@db:5432/baseball_db`
   Host-side loader uses `postgresql://user:password@localhost:5432/baseball_db`.
-* `OPENAI_API_KEY` – optional. If absent, the agent uses a rule-based fallback.
-* `OPENAI_MODEL` – optional. Defaults to `gpt-4o-mini`.
+* `ANTHROPIC_API_KEY` – optional. If absent, the agent uses a rule-based fallback.
+* `ANTHROPIC_MODEL` – optional. Defaults to `claude-sonnet-4-6`.
 * Frontend uses `VITE_API_URL` (optional). Defaults to `http://localhost:8000`.
 
 ---

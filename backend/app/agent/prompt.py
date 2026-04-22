@@ -16,23 +16,21 @@ Key behaviors:
 - Guarded override so canonical hints do NOT clobber good stats already normalized from the text.
 - Leaderboard-by-year default (top-1) collapse into a single colored bar series.
 - Historical single-year comparisons narrated in past tense; forecasts include method/answer lines.
-
-This module expects the surrounding package to provide:
-- ..db.models.BattingStats (SQLAlchemy)
-- ..toolkit.stats.* utilities and leaderboard tools
-- ..toolkit.projections.* and ..toolkit.aging.project_stat_aging_knn
 """
 
-import os, json, difflib, unicodedata
+import os
+import json
+import difflib
+import unicodedata
 from datetime import datetime
 from sqlalchemy import func
 from collections import defaultdict, Counter
 
-# OpenAI SDK optional; fallback works if unavailable.
+# Anthropic SDK optional; fallback works if unavailable.
 try:
-    from openai import OpenAI
+    import anthropic
 except Exception:
-    OpenAI = None
+    anthropic = None  # type: ignore
 
 from ..db.models import BattingStats
 from ..toolkit.stats import (
@@ -44,7 +42,7 @@ from ..toolkit.stats import (
     name_for_id,
     STAT_LABELS as TOOLKIT_LABELS,
     latest_year as stats_latest_year,
-    is_rate_stat,               # <-- added
+    is_rate_stat,
     # --- leaderboard tools ---
     leaderboard,
     leaderboard_range,
@@ -56,8 +54,8 @@ from ..toolkit.projections import (
 )
 from ..toolkit.aging import project_stat_aging_knn
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 
 # -------------------- Human-readable labels --------------------
@@ -74,7 +72,6 @@ def _supported_stats(db):
     """
     Columns that the planner may pick. Start with real DB columns, then
     add virtuals that the toolkit can compute (e.g., OPS).
-    This keeps things working even if some datasets omit a physical column.
     """
     cols = set(table_columns(db))
     # Virtuals the toolkit can resolve in stats.resolve_stat_column
@@ -260,7 +257,7 @@ ALIAS_MAP = {
     "squared_up_swing": ["squared-up swing", "squared up swing%"],
 }
 
-def normalize_stat(db, user_stat: str) -> str or None:
+def normalize_stat(db, user_stat: str) -> str | None:
     if not user_stat:
         return None
     cols = _supported_stats(db)
@@ -328,7 +325,6 @@ def canonical_stat_from_text(db, text):
     if (" bb% " in pad or " walk% " in pad or " walk % " in t or " walk rate " in t or " bb pct " in pad or " bb percentage " in t):
         return "bb_percent" if exists("bb_percent") else None
 
-    # heavy hitters...
     if (" ops " in pad) or (" on base plus slugging " in t) or (" on-base plus slugging " in t):
         return "on_base_plus_slg" if exists("on_base_plus_slg") else None
     if " woba " in pad and exists("woba"):
@@ -344,7 +340,6 @@ def canonical_stat_from_text(db, text):
     if (" hr " in pad) or (" home run" in t) or (" homers " in pad) or (" homers" in t):
         return "home_run" if exists("home_run") else None
 
-    # expanded: frequently asked advanced stats
     if " xba " in pad or " expected batting average " in t:
         return "xba" if exists("xba") else None
     if " xslg " in pad or " expected slugging " in t:
@@ -391,10 +386,10 @@ def canonical_stat_from_text(db, text):
 
 # -------------------- LLM planning --------------------
 def get_llm_client():
-    if not OPENAI_API_KEY or OpenAI is None:
+    if not ANTHROPIC_API_KEY or anthropic is None:
         return None
     try:
-        return OpenAI(api_key=OPENAI_API_KEY)
+        return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     except Exception:
         return None
 
@@ -498,13 +493,15 @@ def llm_plan_from_text(db, text):
         return cheap_rules_fallback(db, text)
 
     try:
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            response_format={"type": "json_object"},
-            messages=fewshot_messages(allow, text),
+        all_messages = fewshot_messages(allow, text)
+        resp = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=1024,
+            system=all_messages[0]["content"],
+            messages=all_messages[1:],
             temperature=0.0,
         )
-        raw = (resp.choices[0].message.content or "").strip()
+        raw = (resp.content[0].text or "").strip()
         plan = json.loads(raw)
         if not isinstance(plan, dict) or "tool" not in plan:
             raise ValueError("Bad JSON plan")
@@ -518,7 +515,7 @@ def all_player_names(db):
     rows = db.query(BattingStats.full_name).filter(BattingStats.full_name != None).distinct().all()
     return [clean(r[0]) for r in rows if r and r[0]]
 
-def fuzzy_name_lookup(db, name: str) -> str or None:
+def fuzzy_name_lookup(db, name: str) -> str | None:
     names = all_player_names(db)
     if not names:
         return None
@@ -638,7 +635,6 @@ def detect_single_player_id_from_text(db, text: str):
             found.append(pid)
             seen.add(pid)
 
-    # only trust it when there's exactly one unique match
     return found[0] if len(found) == 1 else None
 
 
@@ -678,15 +674,9 @@ def parse_horizon(text: str):
     return None
 
 def wants_projection(text: str) -> bool:
-    """
-    Determine if the user is asking for a projection/forecast.
-
-    Fix: do NOT trigger just because the text contains 'in '.
-    Only consider 'in' a forecast signal when it appears as 'in <N> year(s)'.
-    """
+    """Determine if the user is asking for a projection/forecast."""
     t = " ".join((text or "").lower().split())
 
-    # Strong triggers
     if any(kw in t for kw in (
         "project", "predict", "forecast",
         "next season", "next year",
@@ -763,7 +753,7 @@ def detect_leaderboard_intent(text: str):
 
 
 # -------------------- Cheap fallback when LLM is unavailable --------------------
-def guess_stat_from_text(db, t: str) -> str:
+def fallback_stat_from_text(db, t: str) -> str:
     s = normalize_stat(db, t)
     if s:
         return s
@@ -809,7 +799,7 @@ def guess_stat_from_text(db, t: str) -> str:
 def cheap_rules_fallback(db, text):
     lb = detect_leaderboard_intent(text)
     if lb:
-        stat = canonical_stat_from_text(db, text) or guess_stat_from_text(db, text)
+        stat = canonical_stat_from_text(db, text) or fallback_stat_from_text(db, text)
         if "start_year" in lb and "end_year" in lb:
             if lb.get("mode") == "per_year":
                 return {"tool": "leaderboard_by_year", "args": {
@@ -833,7 +823,7 @@ def cheap_rules_fallback(db, text):
         start_year, end_year = int(years[0]), int(years[1])
     elif len(years) == 1:
         year = int(years[0])
-    stat = guess_stat_from_text(db, t)
+    stat = fallback_stat_from_text(db, t)
 
     if "compare" in t:
         return {"tool": "compare", "args": {
@@ -930,15 +920,16 @@ def polish_narration_with_llm(client, result, draft, forecasting=False):
                 "Write in one or two compact sentences. Include explicit numeric values. "
                 "This IS a forecast, so future-tense is fine.\n"
             )
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
+        resp = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=512,
+            system="You are a precise data writer.",
             messages=[
-                {"role": "system", "content": "You are a precise data writer."},
                 {"role": "user", "content": guard + f"Draft: {draft}\nChart JSON:\n{json.dumps(result)[:6000]}"},
             ],
             temperature=0.1,
         )
-        text = (resp.choices[0].message.content or "").strip()
+        text = (resp.content[0].text or "").strip()
         return text or draft
     except Exception:
         return draft
@@ -1192,7 +1183,6 @@ def run_prompt(db, text, debug=False):
     tool = (plan or {}).get("tool")
     args = (plan or {}).get("args") or {}
 
-    # --- initial normalization from args ---
     if "stat" in args:
         norm = normalize_stat(db, args.get("stat"))
         if norm:
@@ -1224,7 +1214,6 @@ def run_prompt(db, text, debug=False):
         elif "stats" in args and not args.get("stats"):
             args["stats"] = [hint]
 
-    # apply the same-family upgrade to multi-stat lists (e.g., SLG/OBP → OPS when the text says OPS)
     if hint and isinstance(args.get("stats"), list) and args["stats"]:
         upgraded = []
         seen = set()
@@ -1234,7 +1223,6 @@ def run_prompt(db, text, debug=False):
                 upgraded.append(s2); seen.add(s2)
         args["stats"] = upgraded
         plan["args"] = args
-    # ------------------------------------------------------------------
 
     # --- rescue: if the user clearly lists multiple stats, force compare_multi
     auto_stats = extract_stats_list_from_text(db, text)
@@ -1261,7 +1249,6 @@ def run_prompt(db, text, debug=False):
         if not stats_list and args.get("stat"):
             stats_list = [args["stat"]]
         if len(stats_list) <= 1:
-            # choose a sensible stat
             stat_slug = stats_list[0] if stats_list else (canonical_stat_from_text(db, text) or "home_run")
             stat_slug = normalize_stat(db, stat_slug) or stat_slug
             args = {
@@ -1291,7 +1278,6 @@ def run_prompt(db, text, debug=False):
             tool = "compare"
             args = plan["args"]
         else:
-            # Seed missing pieces on an existing compare plan
             args = dict(args)
             if not args.get("players") and not args.get("player_ids"):
                 args["player_ids"] = [detected_pid]
@@ -1390,6 +1376,15 @@ def run_prompt(db, text, debug=False):
 
     client = get_llm_client()
 
+    def _finalize(out, forecasting=False, draft=None):
+        if draft is None:
+            draft = deterministic_narration(out, plan)
+        out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=forecasting)
+        if debug:
+            out["ai_source"] = source
+            out["plan"] = plan
+        return attach_label_metadata(out)
+
     # ---------- leaderboard ----------
     if tool == "leaderboard":
         res = leaderboard(
@@ -1401,12 +1396,7 @@ def run_prompt(db, text, debug=False):
             args.get("order", "desc"),
         )
         out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
-        draft = deterministic_narration(out, plan)
-        out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=False)
-        if debug:
-            out["ai_source"] = source
-            out["plan"] = plan
-        return attach_label_metadata(out)
+        return _finalize(out)
 
     # ---------- leaderboard_range ----------
     if tool == "leaderboard_range":
@@ -1421,12 +1411,7 @@ def run_prompt(db, text, debug=False):
             args.get("min_pa"),
         )
         out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
-        draft = deterministic_narration(out, plan)
-        out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=False)
-        if debug:
-            out["ai_source"] = source
-            out["plan"] = plan
-        return attach_label_metadata(out)
+        return _finalize(out)
 
     # ---------- leaderboard_by_year ----------
     if tool == "leaderboard_by_year":
@@ -1446,12 +1431,7 @@ def run_prompt(db, text, debug=False):
                     args.get("order") or "desc",
                 )
                 out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
-                draft = deterministic_narration(out, plan)
-                out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=False)
-                if debug:
-                    out["ai_source"] = source
-                    out["plan"] = plan
-                return attach_label_metadata(out)
+                return _finalize(out)
             else:
                 latest = stats_latest_year(db)
                 sy, ey = latest - 4, latest
@@ -1496,7 +1476,6 @@ def run_prompt(db, text, debug=False):
                 leaders_by_year_map[int(year)] = pname
                 per_player[pname].append({"x": int(year), "y": yval})
 
-            # build multi-series (one per player) so the legend shows player names/colors
             def first_year(items):
                 return min(int(d["x"]) for d in items) if items else 9999
             series = [
@@ -1524,21 +1503,11 @@ def run_prompt(db, text, debug=False):
             out = {"chart_type": "bar", "series": series, "meta": meta}
 
             draft = leaders_combined_answer(stat, flat_data, leaders_by_year_map, y0, y1) or deterministic_narration(out, plan)
-            out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=False)
-
-            if debug:
-                out["ai_source"] = source
-                out["plan"] = plan
-            return attach_label_metadata(out)
+            return _finalize(out, draft=draft)
 
         # Default facet behavior (limit > 1)
         out = {"chart_type": res["chart_type"], "facets": res["facets"], "meta": res.get("meta", {})}
-        draft = deterministic_narration(out, plan)
-        out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=False)
-        if debug:
-            out["ai_source"] = source
-            out["plan"] = plan
-        return attach_label_metadata(out)
+        return _finalize(out)
 
     # ---------- compare ----------
     if tool == "compare":
@@ -1566,15 +1535,11 @@ def run_prompt(db, text, debug=False):
 
         if is_historical:
             result["narration"] = historical_single_year_answer(result, plan)
-        else:
-            draft = deterministic_narration(result, plan)
-            result["narration"] = polish_narration_with_llm(client, result, draft, forecasting=False)
-
-        if debug:
-            result["ai_source"] = source
-            result["plan"] = plan
-
-        return attach_label_metadata(result)
+            if debug:
+                result["ai_source"] = source
+                result["plan"] = plan
+            return attach_label_metadata(result)
+        return _finalize(result)
 
     # ---------- compare_multi ----------
     if tool == "compare_multi":
@@ -1592,18 +1557,9 @@ def run_prompt(db, text, debug=False):
         )
         if res.get("chart_type") == "facet":
             out = {"chart_type": "facet", "facets": res["facets"], "meta": res.get("meta", {})}
-            draft = deterministic_narration(out, plan)
-            out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=False)
         else:
             out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
-            draft = deterministic_narration(out, plan)
-            out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=False)
-
-        if debug:
-            out["ai_source"] = source
-            out["plan"] = plan
-
-        return attach_label_metadata(out)
+        return _finalize(out)
 
     # ---------- predict ----------
     if tool == "predict":
@@ -1666,12 +1622,7 @@ def run_prompt(db, text, debug=False):
             else:
                 answer_line = ""
             draft = narration_from_plan(db, plan) + answer_line
-            out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=True)
-
-            if debug:
-                out["ai_source"] = source
-                out["plan"] = plan
-            return attach_label_metadata(out)
+            return _finalize(out, forecasting=True, draft=draft)
 
         v = predict_player_stat(db, player_id, stat, int(args.get("years") or 3))
         y = v if v is not None else 0.0
@@ -1681,11 +1632,7 @@ def run_prompt(db, text, debug=False):
             "meta": {"label_map": label_map_for([stat]), "title": "Projected " + stat_label(stat)},
         }
         draft = narration_from_plan(db, plan)
-        out["narration"] = polish_narration_with_llm(client, out, draft, forecasting=True)
-        if debug:
-            out["ai_source"] = source
-            out["plan"] = plan
-        return attach_label_metadata(out)
+        return _finalize(out, forecasting=True, draft=draft)
 
     # ---------- default ----------
     out = {"chart_type": "bar", "series": [], "meta": {"label_map": {}}}

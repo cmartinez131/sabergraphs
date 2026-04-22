@@ -7,23 +7,6 @@ Usage:
         # return graceful empty payload
 """
 
-import os
-import json
-
-# Optional OpenAI client (safe if not installed or no key provided)
-try:
-    from openai import OpenAI  # type: ignore
-except Exception:
-    OpenAI = None  # type: ignore
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-
-def normalize_text(s: str) -> str:
-    return " ".join((s or "").lower().split())
-
-
 # High-signal baseball vocabulary (stats, nouns, leagues, teams).
 BASEBALL_POSITIVE = {
     # leagues / org
@@ -67,9 +50,9 @@ def heuristic_is_baseball(text: str) -> bool | None:
     Returns:
       True  -> looks like baseball
       False -> looks non-baseball
-      None  -> unsure (let LLM decide if available)
+      None  -> unsure
     """
-    padded = f" {normalize_text(text)} "
+    padded = f" {' '.join((text or '').lower().split())} "
 
     # Strong negative: other sports or obviously unrelated topics.
     if any(f" {word} " in padded for word in NEGATIVE_STRONG):
@@ -95,57 +78,12 @@ def heuristic_is_baseball(text: str) -> bool | None:
     return None
 
 
-def llm_is_baseball(text: str) -> bool | None:
+def is_baseball_prompt(text: str) -> bool:
     """
-    LLM fallback for fuzzy cases. Returns True/False, or None on any failure.
-    """
-    if not OPENAI_API_KEY or OpenAI is None:
-        return None
-
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Classify the user's prompt as 'baseball' or 'other'. "
-                    "Consider MLB, baseball teams, players, or statistics as baseball. "
-                    "Respond ONLY with JSON: {\"label\":\"baseball\"|\"other\"}."
-                ),
-            },
-            {"role": "user", "content": text or ""},
-        ]
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            response_format={"type": "json_object"},
-            messages=messages,
-            temperature=0.0,
-        )
-        result_text = (response.choices[0].message.content or "").strip()
-        result_obj = json.loads(result_text)
-        label = str(result_obj.get("label", "")).lower()
-        if label in ("baseball", "other"):
-            return label == "baseball"
-        return None
-    except Exception:
-        return None
-
-
-def is_baseball_prompt(text: str, use_llm: bool = True) -> bool:
-    """
-    Public entry: fast heuristic first, optional LLM as backup.
+    Public entry: heuristic classifier. Returns False when unsure.
     """
     if not isinstance(text, str) or not text.strip():
         return False
 
-    heuristic = heuristic_is_baseball(text)
-    if heuristic is not None:
-        return heuristic
-
-    if use_llm:
-        llm_result = llm_is_baseball(text)
-        if llm_result is not None:
-            return llm_result
-
-    # Default to False when unsure and no LLM.
-    return False
+    result = heuristic_is_baseball(text)
+    return result if result is not None else False

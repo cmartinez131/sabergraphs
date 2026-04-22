@@ -58,3 +58,4 @@ backend/app/ml_models/*.json
 
 # --- Misc ---
 *.swp
+.claude/
