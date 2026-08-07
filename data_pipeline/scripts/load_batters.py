@@ -1,7 +1,7 @@
 # data_pipeline/scripts/load_batters_csv.py
 import pandas as pd
 from sqlalchemy import create_engine
-from sqlalchemy.types import Integer, Float, String
+from sqlalchemy.types import Integer, String
 import os
 import sys
 

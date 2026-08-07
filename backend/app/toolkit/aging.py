@@ -1,9 +1,5 @@
 # backend/app/toolkit/aging.py
 
-import os
-import math
-import json
-import time
 
 import numpy as np
 import pandas as pd
@@ -358,7 +354,9 @@ def _aggregate_comparable_paths(engine, comp_df, stat, base_age, horizon, age_ca
     for i in range(int(horizon)):
         vals = [p[i] for p in paths if p[i] is not None and np.isfinite(p[i])]
         if not vals:
-            agg_mean.append(None); agg_p10.append(None); agg_p90.append(None)
+            agg_mean.append(None)
+            agg_p10.append(None)
+            agg_p90.append(None)
         else:
             v = np.array(vals, dtype=float)
             agg_mean.append(float(np.mean(v)))

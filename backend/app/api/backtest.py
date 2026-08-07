@@ -3,8 +3,9 @@
 # Rolling-origin backtests for simple next-season forecasts.
 # Returns summary error metrics and a small bar chart so you can visualize MAE/RMSE
 # alongside p10–p90 coverage of an empirical residual band.
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException
 import numpy as np
 
 from ..db.database import get_db
@@ -12,57 +13,14 @@ from ..db.models import BattingStats
 from ..toolkit.stats import (
     resolve_stat_column,
     col_exists,
-    label_map_for,
     stat_label,
     latest_year,
 )
-from .schemas import make_chart_response
+from .schemas import BacktestRequest, ChartResponse, make_chart_response
+
+logger = logging.getLogger("app.backtest")
 
 router = APIRouter(prefix="/api", tags=["backtest"])
-
-
-def parse_payload(p):
-    if not isinstance(p, dict):
-        raise HTTPException(400, "Body must be a JSON object.")
-
-    stat = p.get("stat")
-    if not isinstance(stat, str) or not stat.strip():
-        raise HTTPException(400, "Provide 'stat' (e.g., 'woba', 'on_base_plus_slg', 'home_run').")
-
-    start_year = p.get("start_year")
-    end_year = p.get("end_year")
-    lookback = p.get("lookback", 3)
-    method = (p.get("method") or "baseline").lower()  # 'baseline' (mean) or 'linear'
-    min_pa = p.get("min_pa")  # apply to target year only if provided
-
-    try:
-        if start_year is not None:
-            start_year = int(start_year)
-        if end_year is not None:
-            end_year = int(end_year)
-        lookback = int(lookback)
-        if min_pa is not None:
-            min_pa = int(min_pa)
-    except Exception:
-        raise HTTPException(400, "start_year/end_year/lookback/min_pa must be integers if provided.")
-
-    if not start_year or not end_year:
-        raise HTTPException(400, "Provide both 'start_year' and 'end_year' (inclusive).")
-    if end_year <= start_year:
-        raise HTTPException(400, "'end_year' must be greater than 'start_year'.")
-    if lookback < 1:
-        raise HTTPException(400, "'lookback' must be >= 1.")
-    if method not in ("baseline", "linear"):
-        raise HTTPException(400, "Unsupported method. Use 'baseline' or 'linear'.")
-
-    return {
-        "stat": stat.strip(),
-        "start_year": start_year,
-        "end_year": end_year,
-        "lookback": lookback,
-        "method": method,
-        "min_pa": min_pa,
-    }
 
 
 def run_backtest(db, stat, start_year, end_year, lookback, method, min_pa):
@@ -234,24 +192,23 @@ def run_backtest(db, stat, start_year, end_year, lookback, method, min_pa):
     return series, meta, narration
 
 
-@router.post("/backtest")
-async def backtest_endpoint(request: Request, db=Depends(get_db)):
-    payload = await request.json()
-    args = parse_payload(payload)
+@router.post("/backtest", response_model=ChartResponse)
+async def backtest_endpoint(body: BacktestRequest, db=Depends(get_db)):
     try:
         series, meta, narration = run_backtest(
             db=db,
-            stat=args["stat"],
-            start_year=args["start_year"],
-            end_year=args["end_year"],
-            lookback=args["lookback"],
-            method=args["method"],
-            min_pa=args["min_pa"],
+            stat=body.stat,
+            start_year=body.start_year,
+            end_year=body.end_year,
+            lookback=body.lookback,
+            method=body.method,
+            min_pa=body.min_pa,
         )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    except Exception:
+        logger.exception("Backtest failed")
+        raise HTTPException(500, "Internal server error.")
 
     return make_chart_response(
         chart_type="bar",

@@ -1,6 +1,5 @@
 """Schema-aware NL → SQL pipeline. Returns { chart_type, series, narration, meta }."""
 
-import os
 import json
 
 from sqlalchemy import text as sa_text
@@ -14,6 +13,13 @@ from ..toolkit.stats import (
     _pa_column_name,
     _qualified_pa_threshold,
 )
+from .common import (
+    ANTHROPIC_MODEL,
+    alias_to_canonical,
+    extract_years,
+    format_number_short,
+    get_llm_client,
+)
 from .sql_guard import (
     ALLOWED_TABLES,
     SqlGuardError,
@@ -21,23 +27,6 @@ from .sql_guard import (
     strip_sql_comments,
     tokenize_identifiers,
 )
-
-try:
-    import anthropic  # type: ignore
-except Exception:
-    anthropic = None  # type: ignore
-
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-
-# ----------------------- LLM wrapper -----------------------
-def get_llm_client():
-    if not ANTHROPIC_API_KEY or anthropic is None:
-        return None
-    try:
-        return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    except Exception:
-        return None
 
 
 def reflect_table_columns(db, table_name):
@@ -63,98 +52,9 @@ def build_catalog(db):
 
 
 # ----------------------- Analyst aliasing -----------------------
-ALIAS_BASE = {
-    # Core rate/average
-    "ops": "on_base_plus_slg",
-    "on-base plus slugging": "on_base_plus_slg",
-    "slugging %": "slg_percent",
-    "slugging percentage": "slg_percent",
-    "slg": "slg_percent",
-    "obp": "on_base_percent",
-    "on-base %": "on_base_percent",
-    "on-base percentage": "on_base_percent",
-    "avg": "batting_avg",
-    "ba": "batting_avg",
-    "batting average": "batting_avg",
-    "woba": "woba",
-    "xwoba": "xwoba",
-    "wobacon": "wobacon",
-    "xwobacon": "xwobacon",
-    "xslg": "xslg",
-    "xobp": "xobp",
-    "xba": "xba",
-    "xiso": "xiso",
-    "iso": "isolated_power",
-    "babip": "babip",
-
-    # Plate discipline
-    "k%": "k_percent",
-    "k pct": "k_percent",
-    "strikeout %": "k_percent",
-    "strike out percentage": "k_percent",
-    "strikeout percentage": "k_percent",
-    "k rate": "k_percent",
-    "bb%": "bb_percent",
-    "walk %": "bb_percent",
-    "walk rate": "bb_percent",
-    "whiff %": "whiff_percent",
-    "whiff rate": "whiff_percent",
-    "swing %": "swing_percent",
-    "z-swing %": "z_swing_percent",
-    "z-whiff %": "z_swing_miss_percent",
-    "o-swing %": "oz_swing_percent",
-    "o-whiff %": "oz_swing_miss_percent",
-    "o-contact %": "oz_contact_percent",
-    "z-contact %": "iz_contact_percent",
-    "first-pitch strike %": "f_strike_percent",
-    "meatball %": "meatball_percent",
-    "meatball swing %": "meatball_swing_percent",
-
-    # Batted-ball quality
-    "hard-hit %": "hard_hit_percent",
-    "sweet-spot %": "sweet_spot_percent",
-    "barrel %": "barrel_batted_rate",
-    "pull %": "pull_percent",
-    "opposite %": "opposite_percent",
-    "straightaway %": "straightaway_percent",
-    "groundball %": "groundballs_percent",
-    "flyball %": "flyballs_percent",
-    "line-drive %": "linedrives_percent",
-    "popup %": "popups_percent",
-    "exit velocity": "exit_velocity_avg",
-    "avg exit velocity": "exit_velocity_avg",
-    "launch angle": "launch_angle_avg",
-    "avg launch angle": "launch_angle_avg",
-
-    # Counting stats (batting)
-    "hr": "home_run",
-    "home runs": "home_run",
-    "homers": "home_run",
-    "rbi": "b_rbi",
-    "rbis": "b_rbi",
-    "runs batted in": "b_rbi",
-    "hits": "hit",
-    "singles": "single",
-    "doubles": "double",
-    "triples": "triple",
-    "walks": "walk",
-    "strikeouts": "strikeout",
-    "total bases": "b_total_bases",
-    "hbp": "b_hit_by_pitch",
-
-    # Baserunning
-    "sb": "r_total_stolen_base",
-    "steals": "r_total_stolen_base",
-    "stolen bases": "r_total_stolen_base",
-    "caught stealing": "r_total_caught_stealing",
-    "sprint speed": "sprint_speed",
-
-    # Defense / Statcast fielding
-    "oaa": "n_outs_above_average",
-
-    # Position / meta
-    "position": "primary_position",
-}
+# Flat {phrase: column} view for the planner prompt; the single source of
+# truth for the vocabulary is common.STAT_ALIASES.
+ALIAS_BASE = alias_to_canonical()
 
 def _normalize_key(s: str) -> str:
     return " ".join((s or "").lower().replace("%", " % ").split())
@@ -354,30 +254,6 @@ def llm_nl2sql_plan(db, text):
 
 
 # ----------------------- MLB pa/qual helpers (no regex) -----------------------
-def extract_years_from_text(text):
-    years_found, digits = [], ""
-    for ch in str(text or ""):
-        if ch.isdigit():
-            digits += ch
-        else:
-            if len(digits) == 4:
-                try:
-                    year_val = int(digits)
-                    if 1900 <= year_val <= 2099:
-                        years_found.append(year_val)
-                except Exception:
-                    pass
-            digits = ""
-    if len(digits) == 4:
-        try:
-            year_val = int(digits)
-            if 1900 <= year_val <= 2099:
-                years_found.append(year_val)
-        except Exception:
-            pass
-    return years_found
-
-
 def inject_min_pa_condition(sql, pa_column, min_pa):
     sql_string = strip_sql_comments(sql).rstrip()
     hadSemicolon = sql_string.endswith(";")
@@ -418,20 +294,6 @@ def filter_disallowed_positions(rows, x_key):
 
 
 # ----------------------- Title & narration helpers -----------------------
-def format_number_short(value):
-    try:
-        number = float(value)
-    except Exception:
-        return str(value)
-    if abs(number) >= 100:
-        return f"{number:.0f}"
-    if abs(number) >= 10:
-        return f"{number:.1f}"
-    if abs(number) >= 1:
-        return f"{number:.3f}".rstrip("0").rstrip(".")
-    return f"{number:.3f}".rstrip("0").rstrip(".")
-
-
 def detect_context_from_prompt(text):
     t = (text or "").lower()
     context = {}
@@ -491,7 +353,7 @@ def build_title(text, x_key, y_key, sql):
     else:
         y_label = None
 
-    years_list = extract_years_from_text(text)
+    years_list = extract_years(text)
     year_part = format_year_span(years_list)
     context = detect_context_from_prompt(text)
     limit_value = parse_limit_from_sql(sql)
@@ -568,7 +430,7 @@ def build_summary(chart_type, series, x_key, y_key, prompt_text):
     leaders = [r for r in all_pts if abs(r["y"] - best["y"]) <= 1e-12]
     names = sorted({str(r["id"]) for r in leaders if r.get("id")}) or [str(best.get("x"))]
 
-    years = extract_years_from_text(prompt_text)
+    years = extract_years(prompt_text)
     if len(years) == 1:
         yr_phrase = f" for {years[0]}"
     elif len(years) >= 2:
@@ -592,7 +454,7 @@ def run_nl2sql(db, text):
     if not sql:
         raise ValueError("Planner produced no SQL.")
 
-    years_list = extract_years_from_text(text)
+    years_list = extract_years(text)
     single_year_for_qualification = years_list[0] if len(years_list) == 1 else None
 
     y_key = plan.get("y")
@@ -627,7 +489,6 @@ def run_nl2sql(db, text):
     x_key = plan.get("x")
     y_key = plan.get("y")
     chart_type = (plan.get("chart_type") or "bar").lower()
-    assumptions = (plan.get("assumptions") or "").strip()
 
     if not rows:
         return {

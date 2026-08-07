@@ -104,7 +104,6 @@ STAT_LABELS = {
     "f_strike_percent": "First-Pitch Strike %",
     "meatball_percent": "Meatball %",
     "meatball_swing_percent": "Meatball Swing %",
-    "iz_contact_percent": "Z-Contact %",
     "in_zone_percent": "In-Zone %",
     "out_zone_percent": "Out-of-Zone %",
     "edge_percent": "Edge %",

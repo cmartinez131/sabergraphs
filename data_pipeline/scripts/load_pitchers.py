@@ -1,7 +1,7 @@
 # data_pipeline/scripts/load_pitchers.py
 import pandas as pd
 from sqlalchemy import create_engine
-from sqlalchemy.types import Integer, Float, String
+from sqlalchemy.types import Integer, String
 import os
 import sys
 
@@ -11,7 +11,7 @@ HOST_DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # Allow importing backend models
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend')))
-from app.db.models import PitchingStats  # <-- you'll add this model (see below)
+from app.db.models import PitchingStats  # noqa: E402 — needs the sys.path line above
 
 # New CSV path (2015–2025 pitchers)
 CSV_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', '2015_2025_pitchers.csv')

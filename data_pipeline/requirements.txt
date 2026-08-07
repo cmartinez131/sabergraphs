@@ -1,0 +1,8 @@
+# Ingestion environment (separate from backend/requirements.txt: pybaseball
+# is not yet compatible with the pandas 3.x the API pins).
+#   python3 -m venv .venv-pipeline && .venv-pipeline/bin/pip install -r data_pipeline/requirements.txt
+pybaseball==2.2.7
+pandas==2.3.3
+sqlalchemy==2.0.51
+psycopg2-binary==2.9.12
+alembic==1.19.0

@@ -1,0 +1,25 @@
+# Ingestion pipeline configuration (read by data_pipeline/ingest/config.py).
+
+[statcast]
+seasons = [2021, 2022, 2023, 2024, 2025]
+chunk_days = 7
+# Month-day window fetched within each season (covers spring training
+# through the end of the postseason; empty weeks land 0 rows and complete).
+season_start = "02-20"
+season_end = "11-10"
+delay_seconds = 2.0
+max_attempts = 3
+retry_backoff_seconds = [10, 30]
+
+[bat_tracking]
+# Bat-tracking data exists from 2024 onward.
+seasons = [2024, 2025]
+# Savant leaderboard minimum competitive swings; 1 = include everyone,
+# qualification happens downstream in the API layer.
+min_swings = 1
+
+[quality]
+# Hard-fail a chunk when more than this fraction of rows duplicate the
+# natural key inside a single fetched frame (small counts are dropped
+# keeping the last occurrence, and logged).
+max_duplicate_key_rate = 0.005

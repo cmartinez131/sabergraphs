@@ -51,7 +51,9 @@ def make_training_frame(db, stat, lookback=3, min_pa=0):
     ]
     rows = db.query(*sel).all()
     if not rows:
-        return pd.DataFrame()
+        # Consistent 4-tuple so callers' `X, cols, y_reg, y_cls = ...` unpack
+        # never crashes; the len(X) guards then raise a clean domain error.
+        return pd.DataFrame(), [], np.array([]), np.array([])
 
     df = pd.DataFrame(rows, columns=["player_id", "full_name", "year", "age", "pa", "stat"])
     df = df.sort_values(["player_id", "year"]).reset_index(drop=True)

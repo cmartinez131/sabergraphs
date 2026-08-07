@@ -1,8 +1,7 @@
 # backend/app/api/analytics.py
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import create_engine
+from fastapi import APIRouter, Depends, HTTPException
 
-from ..db.database import get_db, DATABASE_URL
+from ..db.database import get_db, engine
 from ..toolkit.stats import (
     compare_players_by_season,
     leaderboard,
@@ -28,27 +27,36 @@ from ..toolkit.projections import (
 from ..toolkit.aging import project_stat_aging_knn
 
 from .schemas import (
-    validate_compare_payload,
-    validate_predict_payload,
-    validate_compare_multi_payload,
+    ChartResponse,
+    CompareRequest,
+    PredictRequest,
+    CompareMultiRequest,
+    LeaderboardRequest,
+    LeaderboardRangeRequest,
+    CareerArcRequest,
+    RollingMeanRequest,
+    YoyChangeRequest,
+    PercentileRequest,
+    ImprovementRequest,
+    RatePerPaRequest,
+    RadarRequest,
+    HistogramRequest,
     make_chart_response,
 )
 
 router = APIRouter(prefix="/api", tags=["analytics"])
 
 
-@router.post("/compare")
-async def compare_players(request: Request, db=Depends(get_db)):
-    payload = await request.json()
-    data = validate_compare_payload(payload)
+@router.post("/compare", response_model=ChartResponse)
+async def compare_players(body: CompareRequest, db=Depends(get_db)):
     try:
         result = compare_players_by_season(
             db,
-            player_ids=data["player_ids"],
-            stat=data["stat"],
-            year=data["year"],
-            start_year=data["start_year"],
-            end_year=data["end_year"],
+            player_ids=body.player_ids,
+            stat=body.stat,
+            year=body.year,
+            start_year=body.start_year,
+            end_year=body.end_year,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -60,30 +68,26 @@ async def compare_players(request: Request, db=Depends(get_db)):
     )
 
 
-@router.post("/predict")
-async def predict(request: Request, db=Depends(get_db)):
-    payload = await request.json()
-    data = validate_predict_payload(payload)
-
+@router.post("/predict", response_model=ChartResponse)
+async def predict(body: PredictRequest, db=Depends(get_db)):
     try:
-        # NEW: Aging curve + KNN comparables (implements your write-up flow)
-        if data["method"] == "aging_knn":
-            engine = create_engine(DATABASE_URL)
+        # Aging curve + KNN comparables (shared pooled engine, not per-request)
+        if body.method == "aging_knn":
             series, meta = project_stat_aging_knn(
                 db=db,
                 db_engine=engine,
-                player_id=data["player_id"],
-                stat=data["stat"],
-                horizon=data["horizon"],
-                lookback=data["years"],
+                player_id=body.player_id,
+                stat=body.stat,
+                horizon=body.horizon,
+                lookback=body.years,
                 k=25,
                 age_cap=42,
                 alpha_comps=0.5,
             )
-            ttl = f"{stat_label(data['stat'])} forecast (aging+KNN, {data['horizon']} yrs)"
+            ttl = f"{stat_label(body.stat)} forecast (aging+KNN, {body.horizon} yrs)"
             meta = {
                 **(meta or {}),
-                "label_map": label_map_for([data["stat"]]),
+                "label_map": label_map_for([body.stat]),
                 "title": ttl,
                 "bands": {"p10": "lower", "p90": "upper"},
             }
@@ -94,208 +98,197 @@ async def predict(request: Request, db=Depends(get_db)):
                 meta=meta,
             )
 
-        # ML regressors already in your project
-        if data["method"] == "ml":
-            res = predict_player_stat_ml(db, data["player_id"], data["stat"], lookback=data["lookback"])
+        # ML regressors
+        if body.method == "ml":
+            res = predict_player_stat_ml(db, body.player_id, body.stat, lookback=body.lookback)
             return make_chart_response(
                 res["chart_type"], res["series"], "ML projection vs. league baseline.", meta=res.get("meta")
             )
 
-        if data["method"] == "ml_prob":
-            res = predict_player_above_avg_prob(db, data["player_id"], data["stat"], lookback=data["lookback"])
+        if body.method == "ml_prob":
+            res = predict_player_above_avg_prob(db, body.player_id, body.stat, lookback=body.lookback)
             return make_chart_response(
                 res["chart_type"], res["series"], "Probability of being above league average.", meta=res.get("meta")
             )
 
         # Baseline: series forecast (horizon > 1)
-        if data["horizon"] > 1:
+        if body.horizon > 1:
             path = predict_player_stat_series(
                 db,
-                data["player_id"],
-                data["stat"],
-                lookback_years=data["years"],
-                horizon=data["horizon"],
+                body.player_id,
+                body.stat,
+                lookback_years=body.years,
+                horizon=body.horizon,
             )
             series = [
                 {
-                    "id": "Projected " + data["stat"],
+                    "id": "Projected " + body.stat,
                     "data": [{"x": y, "y": float(v)} for (y, v) in path],
                 }
             ]
             meta = {
-                "label_map": label_map_for([data["stat"]]),
-                "title": f"{stat_label(data['stat'])} forecast ({data['horizon']} yrs)",
+                "label_map": label_map_for([body.stat]),
+                "title": f"{stat_label(body.stat)} forecast ({body.horizon} yrs)",
             }
             return make_chart_response(
                 "line",
                 series,
-                "Linear-trend forecast using last {} seasons.".format(data["years"]),
+                "Linear-trend forecast using last {} seasons.".format(body.years),
                 meta=meta,
             )
 
         # Baseline: single-bar projection (trailing average)
-        v = predict_player_stat(db, data["player_id"], data["stat"], data["years"])
+        v = predict_player_stat(db, body.player_id, body.stat, body.years)
         y = v if v is not None else 0.0
-        series = [{"id": "Projected " + data["stat"], "data": [{"x": "Next season", "y": y}]}]
-        meta = {"label_map": label_map_for([data["stat"]]), "title": "Projected " + stat_label(data["stat"])}
+        series = [{"id": "Projected " + body.stat, "data": [{"x": "Next season", "y": y}]}]
+        meta = {"label_map": label_map_for([body.stat]), "title": "Projected " + stat_label(body.stat)}
         return make_chart_response("bar", series, "Baseline projection uses trailing average.", meta=meta)
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/leaderboard")
-async def api_leaderboard(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/leaderboard", response_model=ChartResponse)
+async def api_leaderboard(body: LeaderboardRequest, db=Depends(get_db)):
     try:
         res = leaderboard(
             db,
-            p.get("stat"),
-            p.get("year"),
-            p.get("limit", 10),
-            p.get("min_pa"),
-            p.get("order", "desc"),  # supports top/bottom
+            body.stat,
+            body.year,
+            body.limit,
+            body.min_pa,
+            body.order,  # supports top/bottom
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Leaderboard.", meta=res.get("meta"))
 
 
-@router.post("/leaderboard_range")
-async def api_leaderboard_range(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/leaderboard_range", response_model=ChartResponse)
+async def api_leaderboard_range(body: LeaderboardRangeRequest, db=Depends(get_db)):
     try:
         res = leaderboard_range(
             db,
-            p.get("stat"),
-            p.get("start_year"),
-            p.get("end_year"),
-            p.get("limit", 10),
-            p.get("agg", "sum"),
-            p.get("order", "desc"),
-            p.get("min_pa"),
+            body.stat,
+            body.start_year,
+            body.end_year,
+            body.limit,
+            body.agg,
+            body.order,
+            body.min_pa,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Leaderboard (range).", meta=res.get("meta"))
 
 
-@router.post("/career_arc")
-async def api_career_arc(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/career_arc", response_model=ChartResponse)
+async def api_career_arc(body: CareerArcRequest, db=Depends(get_db)):
     try:
-        res = career_arc(db, p.get("player_id"), p.get("stat"), p.get("start_year"), p.get("end_year"))
+        res = career_arc(db, body.player_id, body.stat, body.start_year, body.end_year)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Career arc.", meta=res.get("meta"))
 
 
-@router.post("/rolling_mean")
-async def api_rolling_mean(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/rolling_mean", response_model=ChartResponse)
+async def api_rolling_mean(body: RollingMeanRequest, db=Depends(get_db)):
     try:
         res = rolling_mean(
             db,
-            p.get("player_id"),
-            p.get("stat"),
-            p.get("window", 3),
-            p.get("start_year"),
-            p.get("end_year"),
+            body.player_id,
+            body.stat,
+            body.window,
+            body.start_year,
+            body.end_year,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Rolling mean.", meta=res.get("meta"))
 
 
-@router.post("/yoy_change")
-async def api_yoy_change(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/yoy_change", response_model=ChartResponse)
+async def api_yoy_change(body: YoyChangeRequest, db=Depends(get_db)):
     try:
-        res = yoy_change(db, p.get("player_id"), p.get("stat"), p.get("start_year"), p.get("end_year"))
+        res = yoy_change(db, body.player_id, body.stat, body.start_year, body.end_year)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Year-over-year change.", meta=res.get("meta"))
 
 
-@router.post("/percentile")
-async def api_percentile(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/percentile", response_model=ChartResponse)
+async def api_percentile(body: PercentileRequest, db=Depends(get_db)):
     try:
-        res = percentile_rank(db, p.get("player_ids", []), p.get("stat"), p.get("year"), p.get("min_pa"))
+        res = percentile_rank(db, body.player_ids, body.stat, body.year, body.min_pa)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Percentiles.", meta=res.get("meta"))
 
 
-@router.post("/improvement")
-async def api_improvement(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/improvement", response_model=ChartResponse)
+async def api_improvement(body: ImprovementRequest, db=Depends(get_db)):
     try:
         res = improvement_leaderboard(
             db,
-            p.get("stat"),
-            p.get("year_start"),
-            p.get("year_end"),
-            p.get("limit", 10),
-            p.get("min_pa"),
+            body.stat,
+            body.year_start,
+            body.year_end,
+            body.limit,
+            body.min_pa,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Most improved.", meta=res.get("meta"))
 
 
-@router.post("/rate_per_pa")
-async def api_rate_per_pa(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/rate_per_pa", response_model=ChartResponse)
+async def api_rate_per_pa(body: RatePerPaRequest, db=Depends(get_db)):
     try:
         res = rate_per_pa(
             db,
-            p.get("player_ids", []),
-            p.get("numerator_stat"),
-            p.get("year"),
-            p.get("per", 600),
-            p.get("pa_col", "plate_appearances"),
+            body.player_ids,
+            body.numerator_stat,
+            body.year,
+            body.per,
+            body.pa_col,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Rate per PA.", meta=res.get("meta"))
 
 
-@router.post("/radar")
-async def api_radar(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/radar", response_model=ChartResponse)
+async def api_radar(body: RadarRequest, db=Depends(get_db)):
     try:
-        res = radar_multistat(db, p.get("player_ids", []), p.get("stats", []), p.get("year"))
+        res = radar_multistat(db, body.player_ids, body.stats, body.year)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "Multi-stat radar.", meta=res.get("meta"))
 
 
-@router.post("/histogram")
-async def api_histogram(request: Request, db=Depends(get_db)):
-    p = await request.json()
+@router.post("/histogram", response_model=ChartResponse)
+async def api_histogram(body: HistogramRequest, db=Depends(get_db)):
     try:
-        res = stat_histogram(db, p.get("stat"), p.get("year"), p.get("bins", 12), p.get("min_pa"))
+        res = stat_histogram(db, body.stat, body.year, body.bins, body.min_pa)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return make_chart_response(res["chart_type"], res["series"], "League distribution.", meta=res.get("meta"))
 
 
-@router.post("/compare_multi")
-async def api_compare_multi(request: Request, db=Depends(get_db)):
-    p = validate_compare_multi_payload(await request.json())
+@router.post("/compare_multi", response_model=ChartResponse)
+async def api_compare_multi(body: CompareMultiRequest, db=Depends(get_db)):
     try:
         res = compare_multi(
             db,
-            players=p["players"],
-            stats=p["stats"],
-            year=p["year"],
-            start_year=p["start_year"],
-            end_year=p["end_year"],
-            mode=p["mode"],
-            layout=p["layout"],
-            normalize=p["normalize"],
-            window=p["window"],
+            players=body.players,
+            stats=body.stats,
+            year=body.year,
+            start_year=body.start_year,
+            end_year=body.end_year,
+            mode=body.mode,
+            layout=body.layout,
+            normalize=body.normalize,
+            window=body.window,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

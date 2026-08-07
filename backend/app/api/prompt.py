@@ -1,5 +1,8 @@
 # backend/app/api/prompt.py
-from fastapi import APIRouter, Depends, HTTPException, Request
+import logging
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..db.database import get_db
 from ..agent.nl2sql import run_nl2sql  # NL→SQL planner/executor
@@ -12,9 +15,12 @@ from ..agent.prompt import (  # classic agent pipeline (planner → toolkit)
     canonical_stat_from_text,    # new import for stat canon from raw text
     normalize_stat,              # new import for alias-aware normalization
 )
-from ..toolkit.stats import career_arc, compare_players_by_season, stat_label
+from ..toolkit.stats import career_arc, compare_players_by_season
 from ..agent.is_baseball_prompt import is_baseball_prompt
+from .schemas import ChartResponse, PromptRequest
 
+
+logger = logging.getLogger("app.prompt")
 
 router = APIRouter(prefix="/api", tags=["prompt"])
 
@@ -73,8 +79,13 @@ def _players_mentioned(db, text: str) -> list[str]:
         return []
 
 
-@router.post("/prompt")
-async def prompt_endpoint(request: Request, db=Depends(get_db)):
+@router.post("/prompt", response_model=ChartResponse)
+async def prompt_endpoint(
+    body: PromptRequest,
+    db=Depends(get_db),
+    route: Literal["auto", "sql", "agent"] = "auto",
+    debug: bool = False,
+):
     """
     Unified natural-language endpoint.
 
@@ -91,11 +102,8 @@ async def prompt_endpoint(request: Request, db=Depends(get_db)):
       • route=auto  → try NL→SQL first, else deterministic SQL fallback, else agent (default)
       • debug=1     → include planner/args metadata from the agent route
     """
-    body = await request.json()
-    text = (body or {}).get("text")
-    if not text or not isinstance(text, str):
-        raise HTTPException(status_code=400, detail="Provide 'text' field (string).")
-    
+    text = body.text
+
     # ---- Non-baseball prompts: return graceful empty payload ----
     if not is_baseball_prompt(text):
         return {
@@ -104,11 +112,6 @@ async def prompt_endpoint(request: Request, db=Depends(get_db)):
             "narration": "Please enter a baseball query.",
             "meta": {"title": "No baseball data"}
         }
-
-
-    qp = request.query_params
-    route = (qp.get("route") or "auto").lower()
-    debug = qp.get("debug") in ("1", "true", "yes")
 
     # Skip NL→SQL for forecast-y prompts
     tnorm = " ".join(text.lower().split())
@@ -193,8 +196,10 @@ async def prompt_endpoint(request: Request, db=Depends(get_db)):
                 raise ValueError("NL→SQL produced empty results")
 
             return result
-        except Exception:
+        except Exception as e:
             # Instead of erroring or dropping to agent, try a deterministic SQL fallback.
+            # Log it: a silently-masked NL→SQL failure is how B1 went unnoticed.
+            logger.info("NL2SQL path failed (%s); trying deterministic fallback", e)
             fallback = _deterministic_sql_fallback()
             if fallback:
                 return fallback
@@ -207,5 +212,6 @@ async def prompt_endpoint(request: Request, db=Depends(get_db)):
         result = run_prompt(db, text, debug=debug)
         result["ai_source"] = "agent"
         return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Agent route failed")
+        raise HTTPException(status_code=500, detail="Internal server error.")

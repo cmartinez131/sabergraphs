@@ -18,19 +18,12 @@ Key behaviors:
 - Historical single-year comparisons narrated in past tense; forecasts include method/answer lines.
 """
 
-import os
 import json
 import difflib
 import unicodedata
 from datetime import datetime
 from sqlalchemy import func
 from collections import defaultdict, Counter
-
-# Anthropic SDK optional; fallback works if unavailable.
-try:
-    import anthropic
-except Exception:
-    anthropic = None  # type: ignore
 
 from ..db.models import BattingStats
 from ..toolkit.stats import (
@@ -53,9 +46,13 @@ from ..toolkit.projections import (
     predict_player_stat_series,
 )
 from ..toolkit.aging import project_stat_aging_knn
-
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+from .common import (
+    ANTHROPIC_MODEL,
+    STAT_ALIASES,
+    extract_years,
+    format_number_short as fmt_number,
+    get_llm_client,
+)
 
 
 # -------------------- Human-readable labels --------------------
@@ -114,10 +111,12 @@ def attach_label_metadata(obj: dict) -> dict:
         new_facets = []
         for f in facets:
             if not isinstance(f, dict):
-                new_facets.append(f); continue
+                new_facets.append(f)
+                continue
             t = f.get("title")
             if isinstance(t, str) and t:
-                f = dict(f); f["title_human"] = replace_stat_tokens(t)
+                f = dict(f)
+                f["title_human"] = replace_stat_tokens(t)
             new_facets.append(f)
         obj["facets"] = new_facets
 
@@ -141,121 +140,9 @@ def normalize_for_match(s: str) -> str:
         buf.append(ch if (ch.isalnum() or ch == "%") else " ")
     return " ".join("".join(buf).split())
 
-def extract_years(text: str):
-    t = normalize_for_match(text)
-    years = []
-    for token in t.split():
-        if token.isdigit() and len(token) == 4:
-            y = int(token)
-            if 1900 <= y <= 2099:
-                years.append(y)
-    return years
-
-
 # -------------------- STAT canonicalization --------------------
-# Broad alias coverage: synonyms, abbreviations, and vernacular.
-ALIAS_MAP = {
-    # Core rates/averages
-    "woba": ["woba", "weighted on base average", "weighted on-base average"],
-    "xwoba": ["xwoba", "expected woba", "expected weighted on base"],
-    "on_base_plus_slg": ["ops", "on base plus slugging", "on-base plus slugging"],
-    "on_base_percent": ["obp", "on base percentage", "on-base percentage"],
-    "slg_percent": ["slg", "slugging", "slugging percentage"],
-    "isolated_power": ["iso", "isolated power"],
-    "batting_avg": ["batting average", "avg", "ba"],
-    "babip": ["babip", "batting average on balls in play"],
-    "wobacon": ["wobacon", "woba on contact", "woba on-contact"],
-    "xwobacon": ["xwobacon", "expected wobacon", "x woba on contact"],
-    "bacon": ["bacon", "ba on contact", "batting average on contact"],
-    "xbacon": ["xbacon", "expected ba on contact", "x ba on contact"],
-    "xba": ["xba", "expected batting average", "expected ba"],
-    "xslg": ["xslg", "expected slugging"],
-    "xobp": ["xobp", "expected obp", "expected on base"],
-    "xiso": ["xiso", "expected iso", "expected isolated power"],
-
-    # Counting stats (batting)
-    "home_run": ["hr", "homers", "home runs", "homer"],
-    "hit": ["hits", "h"],
-    "single": ["singles", "1b"],
-    "double": ["doubles", "2b"],
-    "triple": ["triples", "3b"],
-    "strikeout": ["k", "so", "strikeouts"],
-    "walk": ["bb", "walks", "base on balls"],
-    "b_rbi": ["rbi", "rbis", "runs batted in"],
-    "b_total_bases": ["tb", "total bases"],
-    "b_hit_by_pitch": ["hbp", "hit by pitch"],
-    "b_sac_fly": ["sf", "sac fly", "sacrifice fly"],
-    "b_sac_bunt": ["sh", "sac bunt", "sacrifice bunt"],
-    "b_gnd_into_dp": ["gidp", "grounded into double play"],
-    "b_gnd_into_tp": ["gitp", "grounded into triple play"],
-    "b_intent_walk": ["ibb", "intentional walk"],
-    "b_reached_on_error": ["roe", "reached on error"],
-    "b_total_pitches": ["pitches seen", "total pitches"],
-
-    # Plate-discipline rates
-    "bb_percent": ["bb%", "walk%", "walk rate", "bb pct", "bb percentage", "walk %"],
-    "k_percent": ["k%", "strikeout%", "strikeout rate", "k pct", "k percentage", "strikeout %"],
-    "whiff_percent": ["whiff%", "whiff rate"],
-    "swing_percent": ["swing%", "swing rate"],
-    "z_swing_percent": ["z-swing%", "zone swing%", "z swing rate"],
-    "z_swing_miss_percent": ["z-whiff%", "zone whiff%", "z swing miss%"],
-    "oz_swing_percent": ["o-swing%", "chase rate", "o swing%", "chase%"],
-    "oz_swing_miss_percent": ["o-whiff%", "o swing miss%"],
-    "oz_contact_percent": ["o-contact%", "out of zone contact%"],
-    "iz_contact_percent": ["z-contact%", "zone contact%"],
-    "f_strike_percent": ["first pitch strike%", "first-pitch strike%"],
-    "meatball_percent": ["meatball%", "meatball rate"],
-    "meatball_swing_percent": ["meatball swing%", "meatball swing rate"],
-
-    # Contact quality / batted-ball
-    "hard_hit_percent": ["hard hit%", "hard-hit%", "hard hit rate"],
-    "sweet_spot_percent": ["sweet spot%", "sweet-spot%", "sweet spot rate"],
-    "barrel_batted_rate": ["barrel%" , "barrel rate"],
-    "barrel": ["barrels"],
-    "exit_velocity_avg": ["exit velocity", "exit velo", "avg exit velo", "ev"],
-    "launch_angle_avg": ["launch angle", "avg launch angle", "la"],
-    "groundballs_percent": ["gb%", "groundball%", "ground ball rate"],
-    "flyballs_percent": ["fb%", "flyball%", "fly ball rate"],
-    "linedrives_percent": ["ld%", "line drive%", "line-drive rate"],
-    "popups_percent": ["pu%", "popup%", "pop up rate"],
-    "pull_percent": ["pull%", "pull rate"],
-    "opposite_percent": ["oppo%", "opposite field%", "opposite rate"],
-    "straightaway_percent": ["straightaway%", "straightaway rate"],
-
-    # Zone aggregates / counts
-    "in_zone": ["in-zone pitches", "zone pitches"],
-    "out_zone": ["out of zone pitches", "o-zone pitches"],
-    "edge_percent": ["edge%", "edge rate"],
-    "edge": ["edge pitches"],
-
-    # Pitches seen by type
-    "pitch_count": ["pitches seen"],
-    "pitch_count_fastball": ["fastballs seen", "fastball seen"],
-    "pitch_count_breaking": ["breaking seen", "breaking balls seen"],
-    "pitch_count_offspeed": ["offspeed seen"],
-
-    # Running & steals
-    "r_total_stolen_base": ["steal", "steals", "stolen base", "stolen bases", "sb"],
-    "r_total_caught_stealing": ["caught stealing", "cs"],
-    "r_stolen_base_pct": ["sb%", "stolen base%"],
-    "r_total_pickoff": ["pickoffs"],
-    "r_run": ["runs", "r"],
-
-    # Speed
-    "sprint_speed": ["sprint speed", "sprint ft/s", "speed"],
-    "n_bolts": ["bolts"],
-    "hp_to_1b": ["home to first", "home-to-first", "htf"],
-
-    # Defense/OAA
-    "n_outs_above_average": ["oaa", "outs above average"],
-
-    # Misc swing metrics
-    "avg_swing_speed": ["swing speed"],
-    "avg_swing_length": ["swing length"],
-    "fast_swing_rate": ["fast swing%", "fast swing rate"],
-    "squared_up_contact": ["squared-up contact", "squared up contact%"],
-    "squared_up_swing": ["squared-up swing", "squared up swing%"],
-}
+# Canonical column -> analyst phrases; single source: common.STAT_ALIASES.
+ALIAS_MAP = STAT_ALIASES
 
 def normalize_stat(db, user_stat: str) -> str | None:
     if not user_stat:
@@ -385,14 +272,6 @@ def canonical_stat_from_text(db, text):
 
 
 # -------------------- LLM planning --------------------
-def get_llm_client():
-    if not ANTHROPIC_API_KEY or anthropic is None:
-        return None
-    try:
-        return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    except Exception:
-        return None
-
 def build_system_instructions(allowed_stats):
     allow_str = ", ".join(sorted(allowed_stats))
     return f"""
@@ -512,7 +391,7 @@ def llm_plan_from_text(db, text):
 
 # -------------------- Name/ID resolution --------------------
 def all_player_names(db):
-    rows = db.query(BattingStats.full_name).filter(BattingStats.full_name != None).distinct().all()
+    rows = db.query(BattingStats.full_name).filter(BattingStats.full_name.isnot(None)).distinct().all()
     return [clean(r[0]) for r in rows if r and r[0]]
 
 def fuzzy_name_lookup(db, name: str) -> str | None:
@@ -536,7 +415,8 @@ def resolve_player_ids(db, players_or_ids):
     for item in players_or_ids or []:
         if isinstance(item, int):
             if item not in seen:
-                resolved.append(item); seen.add(item)
+                resolved.append(item)
+                seen.add(item)
             continue
         if not isinstance(item, str) or not item.strip():
             continue
@@ -561,7 +441,8 @@ def resolve_player_ids(db, players_or_ids):
         if row:
             pid = int(row[0])
             if pid not in seen:
-                resolved.append(pid); seen.add(pid)
+                resolved.append(pid)
+                seen.add(pid)
     return resolved
 
 def resolve_single_player_id(db, player_or_id):
@@ -843,19 +724,6 @@ def cheap_rules_fallback(db, text):
 
 
 # -------------------- Narration utils --------------------
-def fmt_number(v):
-    try:
-        f = float(v)
-    except Exception:
-        return str(v)
-    if abs(f) >= 100:
-        return f"{f:.0f}"
-    if abs(f) >= 10:
-        return f"{f:.1f}"
-    if abs(f) >= 1:
-        return f"{f:.3f}".rstrip("0").rstrip(".")
-    return f"{f:.3f}".rstrip("0").rstrip(".")
-
 def deterministic_narration(result, plan):
     ct = result.get("chart_type")
     series = result.get("series") or []
@@ -1075,7 +943,8 @@ def leaders_combined_answer(stat: str, data, leaders_by_year, start_year: int, e
         run, best, s0, e0, rs, re = 1, 1, ys[0], ys[0], ys[0], ys[0]
         for a, b in zip(ys, ys[1:]):
             if b == a + 1:
-                run += 1; re = b
+                run += 1
+                re = b
             else:
                 if run > best:
                     best, s0, e0 = run, rs, re
@@ -1173,7 +1042,8 @@ def extract_stats_list_from_text(db, text: str) -> list[str]:
     for p in parts:
         s = normalize_stat(db, p)
         if s and s not in seen:
-            out.append(s); seen.add(s)
+            out.append(s)
+            seen.add(s)
     return out
 
 
@@ -1220,7 +1090,8 @@ def run_prompt(db, text, debug=False):
         for s in args["stats"]:
             s2 = hint if same_family(s, hint) else s
             if s2 not in seen:
-                upgraded.append(s2); seen.add(s2)
+                upgraded.append(s2)
+                seen.add(s2)
         args["stats"] = upgraded
         plan["args"] = args
 

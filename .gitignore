@@ -16,6 +16,7 @@ __pycache__/
 *.so
 .venv/
 venv/
+.venv-pipeline/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
