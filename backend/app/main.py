@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.analytics import router as analytics_router
 from .api.prompt import router as prompt_router
 from .api.history import router as history_router
+from .api.backtest import router as backtest_router
 
 app = FastAPI(title="Sabermetric AI API")
 
@@ -41,10 +42,22 @@ def health():
 app.include_router(analytics_router)
 app.include_router(prompt_router)
 app.include_router(history_router)
+app.include_router(backtest_router)
 
-# ---- Startup: ensure history tables exist (dev-friendly; idempotent) ----
+# ---- Startup: ensure history tables + read-only role exist (idempotent) ----
 @app.on_event("startup")
 def _init_tables():
+    # Provision the SELECT-only role the NL->SQL path executes through.
+    # Idempotent; also provisioned for fresh volumes by db/init/01-readonly-role.sh.
+    try:
+        from .db.database import ensure_readonly_role
+        ensure_readonly_role()
+        print("[startup] read-only NL->SQL role ensured.")
+    except Exception as e:
+        # NL->SQL fails closed (falls back to deterministic SQL / agent)
+        # until the role exists, so don't crash the app.
+        print(f"[startup] read-only role init warning: {e}")
+
     # Import here so an install without history models still boots other routes.
     try:
         from .db.history_models import init_history_tables

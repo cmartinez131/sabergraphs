@@ -1,12 +1,8 @@
-# backend/app/api/backetest.py
+# backend/app/api/backtest.py
 #
 # Rolling-origin backtests for simple next-season forecasts.
 # Returns summary error metrics and a small bar chart so you can visualize MAE/RMSE
 # alongside p10–p90 coverage of an empirical residual band.
-"""
-
-
-"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
 import numpy as np

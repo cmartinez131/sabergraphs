@@ -13,12 +13,17 @@ services:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=baseball_db
+      # Password for the SELECT-only role used by the NL->SQL path
+      - NL2SQL_RO_PASSWORD=${NL2SQL_RO_PASSWORD:-nl2sql_ro}
     ports:
       # Expose the database on port 5432 so you can connect from your host machine if needed
       - "5432:5432"
     volumes:
       # This named volume persists the database data even when the container is removed
       - postgres_data:/var/lib/postgresql/data
+      # First-boot provisioning of the read-only NL->SQL role (fresh volumes only;
+      # the backend re-runs the same idempotent provisioning at startup)
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
 
   # The FastAPI Backend Service
@@ -37,6 +42,7 @@ services:
     environment:
       # Pass the database credentials to the backend
       - DATABASE_URL=${DATABASE_URL}
+      - NL2SQL_RO_PASSWORD=${NL2SQL_RO_PASSWORD:-nl2sql_ro}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-6}
       - PYTHONPATH=/app

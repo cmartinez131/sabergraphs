@@ -6,12 +6,20 @@ import json
 from sqlalchemy import text as sa_text
 from sqlalchemy import inspect as sa_inspect
 
+from ..db.database import readonly_session
 from ..toolkit.stats import table_columns, label_map_for
 from ..toolkit.stats import (
     stat_label,
     is_rate_stat,
     _pa_column_name,
     _qualified_pa_threshold,
+)
+from .sql_guard import (
+    ALLOWED_TABLES,
+    SqlGuardError,
+    guard_sql,
+    strip_sql_comments,
+    tokenize_identifiers,
 )
 
 try:
@@ -21,13 +29,6 @@ except Exception:
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-
-ALLOWED_TABLES = {
-    "batting_stats",
-    "player_profiles",
-    "player_features",
-    "player_seasons",
-}
 
 # ----------------------- LLM wrapper -----------------------
 def get_llm_client():
@@ -352,71 +353,6 @@ def llm_nl2sql_plan(db, text):
     return json.loads(raw_text)
 
 
-# ----------------------- String helpers (no regex) -----------------------
-def strip_sql_comments(sql):
-    if not isinstance(sql, str):
-        return ""
-    index = 0
-    length = len(sql)
-    output_chars = []
-    inLine = False
-    inBlock = False
-    inSingle = False
-    inDouble = False
-    while index < length:
-        ch = sql[index]
-        nxt = sql[index + 1] if index + 1 < length else ""
-
-        if not inLine and not inBlock:
-            if not inSingle and not inDouble:
-                if ch == "'":
-                    inSingle = True; output_chars.append(ch); index += 1; continue
-                if ch == '"':
-                    inDouble = True; output_chars.append(ch); index += 1; continue
-                if ch == "-" and nxt == "--":
-                    inLine = True; index += 2; continue
-                if ch == "/" and nxt == "*":
-                    inBlock = True; index += 2; continue
-                output_chars.append(ch); index += 1; continue
-            else:
-                output_chars.append(ch)
-                if inSingle and ch == "'" and (index == 0 or sql[index - 1] != "\\"):
-                    inSingle = False
-                elif inDouble and ch == '"' and (index == 0 or sql[index - 1] != "\\"):
-                    inDouble = False
-                index += 1; continue
-
-        if inLine:
-            if ch == "\n":
-                inLine = False; output_chars.append(ch)
-            index += 1; continue
-
-        if inBlock:
-            if ch == "*" and nxt == "/":
-                inBlock = False; index += 2
-            else:
-                index += 1
-            continue
-    return "".join(output_chars)
-
-
-def lstrip_lower(s):
-    return (s or "").lstrip().lower()
-
-
-def tokenize_identifiers(sql):
-    tokens, current = [], []
-    for ch in sql:
-        if ch.isalnum() or ch == "_":
-            current.append(ch)
-        else:
-            if current:
-                tokens.append("".join(current)); current = []
-    if current:
-        tokens.append("".join(current))
-    return tokens
-
-
 # ----------------------- MLB pa/qual helpers (no regex) -----------------------
 def extract_years_from_text(text):
     years_found, digits = [], ""
@@ -465,126 +401,6 @@ def inject_min_pa_condition(sql, pa_column, min_pa):
         sql_string = sql_string[:cut_position] + " WHERE " + condition + " " + sql_string[cut_position:]
 
     return sql_string + (";" if hadSemicolon else "")
-
-
-# ----------------------- Safety checks -----------------------
-_DENY_KEYWORDS = {
-    "insert", "update", "delete", "truncate", "drop", "alter",
-    "create", "grant", "revoke"
-}
-
-def is_safe_select(sql):
-    if not isinstance(sql, str):
-        return False
-    sql_no_comments = strip_sql_comments(sql)
-    if not lstrip_lower(sql_no_comments).startswith("select"):
-        return False
-    if sql_no_comments.count(";") > 1:
-        return False
-    tokens = [t.lower() for t in tokenize_identifiers(sql_no_comments)]
-    for token in tokens:
-        if token in _DENY_KEYWORDS:
-            return False
-    return True
-
-
-def next_word(s, start_index):
-    length = len(s)
-    i = start_index
-    while i < length and s[i].isspace():
-        i += 1
-    buffer_chars = []
-    while i < length:
-        ch = s[i]
-        if ch.isalnum() or ch == "_" or ch == ".":
-            buffer_chars.append(ch); i += 1
-        else:
-            break
-    return "".join(buffer_chars)
-
-
-def tables_in_from_join(sql):
-    lowered = strip_sql_comments(sql).lower()
-    tables = []
-    index = 0
-    length = len(lowered)
-    while index < length:
-        if index + 5 <= length and lowered[index:index+5] == " from ":
-            name = next_word(lowered, index + 5)
-            if name:
-                tables.append(name.split(".")[-1])
-            index += 5
-        elif index + 6 <= length and lowered[index:index+6] == " join ":
-            name = next_word(lowered, index + 6)
-            if name:
-                tables.append(name.split(".")[-1])
-            index += 6
-        else:
-            index += 1
-    seen = set()
-    unique_tables = []
-    for t in tables:
-        if t not in seen:
-            unique_tables.append(t); seen.add(t)
-    return unique_tables
-
-
-def whitelist_sql(sql, allowed_tables):
-    lowered = strip_sql_comments(sql).lower()
-    used_tables = tables_in_from_join(lowered)
-    if not used_tables:
-        raise ValueError("Query must reference at least one table.")
-    for t in used_tables:
-        if t not in allowed_tables:
-            raise ValueError(f"Table not allowed: {t}")
-
-    needs_year_alignment = any(t in lowered for t in ("player_features", "player_seasons"))
-    if " join " in lowered and ("player_id" not in lowered):
-        raise ValueError("Join must include player_id equality.")
-    if needs_year_alignment and (" year " not in lowered):
-        raise ValueError("Joins with features/seasons must align on year as well.")
-
-    if "information_schema" in lowered or "pg_" in lowered:
-        raise ValueError("System schemas are not allowed.")
-
-
-def enforce_limit(sql, max_rows=200):
-    sql_clean = strip_sql_comments(sql).strip()
-    hasSemicolon = sql_clean.endswith(";")
-    if hasSemicolon:
-        sql_clean = sql_clean[:-1].rstrip()
-
-    tokens = tokenize_identifiers(sql_clean)
-    lowercase_tokens = [t.lower() for t in tokens]
-    limit_index = None
-    for i, token in enumerate(lowercase_tokens):
-        if token == "limit":
-            limit_index = i
-            break
-
-    if limit_index is None:
-        sql_clean = sql_clean + f" LIMIT {max_rows}"
-    else:
-        if limit_index + 1 < len(tokens):
-            try:
-                current_limit = int(tokens[limit_index + 1])
-                if current_limit > max_rows:
-                    for needle in (f"LIMIT {current_limit}", f"limit {current_limit}", f"Limit {current_limit}"):
-                        pos = sql_clean.find(needle)
-                        if pos == -1:
-                            pos = sql_clean.lower().find(needle.lower())
-                        if pos != -1:
-                            sql_clean = sql_clean[:pos] + f"LIMIT {max_rows}" + sql_clean[pos + len(needle):]
-                            break
-            except Exception:
-                sql_clean = sql_clean + f" /* limit parse failed; capped at {max_rows} server-side */"
-        else:
-            sql_clean = sql_clean + f" /* missing limit value; capped at {max_rows} server-side */"
-
-    sql_clean = sql_clean.strip()
-    if not sql_clean.endswith(";"):
-        sql_clean += ";"
-    return sql_clean
 
 
 # ----------------------- Position filtering helpers -----------------------
@@ -776,12 +592,6 @@ def run_nl2sql(db, text):
     if not sql:
         raise ValueError("Planner produced no SQL.")
 
-    if not is_safe_select(sql):
-        raise ValueError("Unsafe SQL; only single SELECT statements are allowed.")
-
-    whitelist_sql(sql, ALLOWED_TABLES)
-    sql = enforce_limit(sql, 200)
-
     years_list = extract_years_from_text(text)
     single_year_for_qualification = years_list[0] if len(years_list) == 1 else None
 
@@ -803,7 +613,16 @@ def run_nl2sql(db, text):
             "year": int(single_year_for_qualification),
         }
 
-    rows = db.execute(sa_text(sql)).mappings().all()
+    # Final safety gate: everything that reaches the database went through
+    # guard_sql, and execution happens on the read-only role (SELECT-only
+    # grants, statement_timeout) — never on the request's read-write session.
+    try:
+        sql = guard_sql(sql)
+    except SqlGuardError as e:
+        raise ValueError(f"Unsafe SQL rejected: {e}")
+
+    with readonly_session() as ro_db:
+        rows = ro_db.execute(sa_text(sql)).mappings().all()
 
     x_key = plan.get("x")
     y_key = plan.get("y")

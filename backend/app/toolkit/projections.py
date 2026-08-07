@@ -2,7 +2,7 @@
 
 import numpy as np
 from ..db.models import BattingStats
-from .models import predict_next_stat, probability_above_average
+from .ml import predict_next_stat, probability_above_average
 from .stats import label_map_for, stat_label, resolve_stat_column
 
 
@@ -64,7 +64,7 @@ def predict_player_stat_series(db, player_id, stat, lookback_years=3, horizon=5)
 
 
 # -------------------- ML wrappers --------------------
-# Note: These call into toolkit/models.py which currently resolves columns via
+# Note: These call into toolkit/ml.py which currently resolves columns via
 # getattr(BattingStats, stat). If you plan to use method="ml" or "ml_prob" with
 # stats that exist in the DB but are not defined as ORM attributes, update
 # models.py to use the same resolver or add a reflection fallback there too.

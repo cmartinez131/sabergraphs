@@ -5,6 +5,8 @@
 frontend/.env
 backend/.env
 .envrc
+# placeholder template is safe to commit
+!.env.example
 
 # --- Python ---
 __pycache__/
