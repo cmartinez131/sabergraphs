@@ -1,77 +1,77 @@
-# Use version 3.8 for modern Docker features
-version: '3.8'
+# Local development stack: postgres :5432, backend :8000, frontend :3000.
+# Every variable below has a working default, so `docker compose up --build`
+# succeeds on a clean clone with no .env file. Copy .env.example to .env to
+# add an ANTHROPIC_API_KEY or override anything.
 
-# Define all the services (containers) for the application
 services:
-  # The PostgreSQL Database Service
+  # ---------------------------------------------------------------- database
   db:
     image: postgres:13-alpine
     container_name: sabermetric_db
     environment:
-      # These are the credentials for your database.
-      # For a real project, use a .env file for security.
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=baseball_db
-      # Password for the SELECT-only role used by the NL->SQL path
+      # Credentials for the SELECT-only role used by the NL->SQL path.
+      - NL2SQL_RO_USER=${NL2SQL_RO_USER:-nl2sql_ro}
       - NL2SQL_RO_PASSWORD=${NL2SQL_RO_PASSWORD:-nl2sql_ro}
     ports:
-      # Expose the database on port 5432 so you can connect from your host machine if needed
+      # Host access for the data_pipeline loaders (which run outside compose).
       - "5432:5432"
     volumes:
-      # This named volume persists the database data even when the container is removed
       - postgres_data:/var/lib/postgresql/data
-      # First-boot provisioning of the read-only NL->SQL role (fresh volumes only;
-      # the backend re-runs the same idempotent provisioning at startup)
+      # First-boot provisioning of the read-only NL->SQL role (fresh volumes
+      # only; the backend re-runs the same idempotent provisioning at startup).
       - ./db/init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
 
-  # The FastAPI Backend Service
+  # ----------------------------------------------------------------- backend
   backend:
     build:
-      context: ./backend  # Look for the Dockerfile in the ./backend directory
+      context: ./backend
       dockerfile: Dockerfile
     container_name: sabermetric_backend
     ports:
-      # Map port 8000 on the host to port 8000 in the container
       - "8000:8000"
     volumes:
-      # Mount the local ./backend directory into the container's /app directory
-      # This allows for hot-reloading when you change your Python code
+      # Source mount + --reload: development posture, not production.
       - ./backend:/app
     environment:
-      # Pass the database credentials to the backend
-      - DATABASE_URL=${DATABASE_URL}
+      # Compose-network form. Host-side loaders need the localhost form instead
+      # (see README "Quick start").
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://user:password@db:5432/baseball_db}
+      - NL2SQL_RO_USER=${NL2SQL_RO_USER:-nl2sql_ro}
       - NL2SQL_RO_PASSWORD=${NL2SQL_RO_PASSWORD:-nl2sql_ro}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Optional full override if the read-only role lives on another host.
+      - READONLY_DATABASE_URL=${READONLY_DATABASE_URL:-}
+      # Optional: without a key both LLM paths fall back to rule-based parsing.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      # Comma-separated origins; unset means "*" with credentials disabled.
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
       - PYTHONPATH=/app
-    # This command tells the container what to run on startup. THIS IS THE FIX.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
-      # This ensures that the 'db' service is started before the 'backend' service
       - db
     restart: unless-stopped
 
-  # The React Frontend Service
+  # ---------------------------------------------------------------- frontend
   frontend:
     build:
-      context: ./frontend # Look for the Dockerfile in the ./frontend directory
+      context: ./frontend
       dockerfile: Dockerfile
     container_name: sabermetric_frontend
     ports:
-      # Map port 3000 on the host to port 3000 in the container
       - "3000:3000"
     volumes:
-      # Mount the local source code for hot-reloading
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
-    # stdin_open is often needed for Create React App's dev server
+    environment:
+      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
+    # Create React App's dev server wants a TTY.
     stdin_open: true
     tty: true
     restart: unless-stopped
 
-# Define the named volumes used by the services
 volumes:
   postgres_data:
-

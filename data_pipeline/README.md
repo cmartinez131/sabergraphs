@@ -101,8 +101,9 @@ independent; see the repo-root README for that flow.
   `ingest/models.py` and migration `0001` (derived from a live fetch,
   deprecated columns excluded). New upstream columns → new migration.
 - **Migrations** — Alembic (`alembic.ini` at repo root, `db/migrations/`).
-  Runs as the compose `user` role, so Phase 1's `ALTER DEFAULT PRIVILEGES`
-  automatically grants the NL→SQL read-only role SELECT on new tables.
+  Runs as the compose `user` role, and the read-only role's
+  `ALTER DEFAULT PRIVILEGES` grant means new tables are automatically
+  SELECT-able by the NL→SQL role.
 
 ## Metric notes
 

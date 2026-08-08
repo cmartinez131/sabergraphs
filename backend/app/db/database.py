@@ -28,7 +28,7 @@ def get_db():
 # ----------------------- read-only role for NL->SQL -----------------------
 # LLM-generated SQL never runs on the read-write engine above. It executes
 # through a dedicated Postgres role with SELECT-only grants, a statement
-# timeout, and read-only transactions (AUDIT B2). The role settings are
+# timeout, and read-only transactions. The role settings are
 # enforced three ways: role-level GUCs (set at provisioning), per-connection
 # options below, and the SELECT-only grants themselves.
 

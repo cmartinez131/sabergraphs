@@ -1,6 +1,6 @@
 #!/bin/sh
 # Provisions the SELECT-only Postgres role used to execute NL->SQL
-# statements (AUDIT B2). Runs automatically on the FIRST boot of a fresh
+# statements. Runs automatically on the FIRST boot of a fresh
 # postgres volume via /docker-entrypoint-initdb.d. Existing volumes are
 # covered by the backend, which performs the same idempotent provisioning
 # at startup (backend/app/db/database.py::ensure_readonly_role).

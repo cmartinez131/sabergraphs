@@ -1,4 +1,4 @@
-"""Adversarial test suite for the NL->SQL safety layer (AUDIT B1/B2).
+"""Adversarial test suite for the NL->SQL safety layer.
 
 Every payload in ADVERSARIAL must be rejected with SqlGuardError.
 Every query in LEGITIMATE must pass and come back execution-ready.

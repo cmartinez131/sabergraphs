@@ -1,0 +1,608 @@
+{
+  "per_season": [
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "season": 2022,
+      "rmse": 11.666898532693251,
+      "mae": 8.170945863163482,
+      "n": 324
+    },
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "season": 2023,
+      "rmse": 10.293813977789632,
+      "mae": 7.751073816963117,
+      "n": 332
+    },
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "season": 2024,
+      "rmse": 11.159143901444526,
+      "mae": 7.87098367554213,
+      "n": 348
+    },
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "season": 2025,
+      "rmse": 10.69426511948169,
+      "mae": 7.916983821330665,
+      "n": 320
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "season": 2022,
+      "rmse": 0.05127501623730132,
+      "mae": 0.037592285799523464,
+      "n": 324
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "season": 2023,
+      "rmse": 0.04931979987902232,
+      "mae": 0.03635808920900546,
+      "n": 332
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "season": 2024,
+      "rmse": 0.05369672523913283,
+      "mae": 0.039829560893010985,
+      "n": 348
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "season": 2025,
+      "rmse": 0.0446108749836369,
+      "mae": 0.03316454116320892,
+      "n": 320
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "season": 2022,
+      "rmse": 7.327913092072208,
+      "mae": 5.663102583765149,
+      "n": 324
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "season": 2023,
+      "rmse": 7.37213225240872,
+      "mae": 5.657314792095353,
+      "n": 332
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "season": 2024,
+      "rmse": 7.030717554498231,
+      "mae": 5.400744443152923,
+      "n": 348
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "season": 2025,
+      "rmse": 7.886552967717578,
+      "mae": 5.853279794220031,
+      "n": 320
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "season": 2022,
+      "rmse": 0.034979223794179684,
+      "mae": 0.027993401944239153,
+      "n": 324
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "season": 2023,
+      "rmse": 0.03129491073747443,
+      "mae": 0.02510577586220229,
+      "n": 332
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "season": 2024,
+      "rmse": 0.03572169024524501,
+      "mae": 0.028298584704278523,
+      "n": 348
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "season": 2025,
+      "rmse": 0.032087828345290496,
+      "mae": 0.025568228093094208,
+      "n": 320
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "season": 2022,
+      "rmse": 9.251793286295673,
+      "mae": 6.842592592592593,
+      "n": 324
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "season": 2023,
+      "rmse": 8.980735741454112,
+      "mae": 6.7379518072289155,
+      "n": 332
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "season": 2024,
+      "rmse": 8.69386757049665,
+      "mae": 6.640804597701149,
+      "n": 348
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "season": 2025,
+      "rmse": 9.011104260855047,
+      "mae": 6.75,
+      "n": 320
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "season": 2022,
+      "rmse": 0.05031674364819354,
+      "mae": 0.037787037037037036,
+      "n": 324
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "season": 2023,
+      "rmse": 0.04624834741430462,
+      "mae": 0.03418674698795181,
+      "n": 332
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "season": 2024,
+      "rmse": 0.05277530443892001,
+      "mae": 0.038393678160919535,
+      "n": 348
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "season": 2025,
+      "rmse": 0.043265495778969175,
+      "mae": 0.031953125,
+      "n": 320
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "season": 2022,
+      "rmse": 7.8686544970512164,
+      "mae": 5.935699588477366,
+      "n": 324
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "season": 2023,
+      "rmse": 8.857467787641289,
+      "mae": 6.567771084337349,
+      "n": 332
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "season": 2024,
+      "rmse": 8.131993011853096,
+      "mae": 6.280651340996168,
+      "n": 348
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "season": 2025,
+      "rmse": 8.908987152495694,
+      "mae": 6.5828125,
+      "n": 320
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "season": 2022,
+      "rmse": 0.046327198020234675,
+      "mae": 0.03627623456790123,
+      "n": 324
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "season": 2023,
+      "rmse": 0.043349203535034186,
+      "mae": 0.03241566265060241,
+      "n": 332
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "season": 2024,
+      "rmse": 0.04793185083421418,
+      "mae": 0.03517624521072797,
+      "n": 348
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "season": 2025,
+      "rmse": 0.04403289588635852,
+      "mae": 0.03188802083333333,
+      "n": 320
+    }
+  ],
+  "overall": [
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "rmse": 10.965962708556523,
+      "mae": 7.925438148648941,
+      "n": 1324
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "rmse": 0.049921778598313475,
+      "mae": 0.03680069983340641,
+      "n": 1324
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "rmse": 7.4022917043192455,
+      "mae": 5.6386573629027135,
+      "n": 1324
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "rmse": 0.03360427105036743,
+      "mae": 0.026763383899594952,
+      "n": 1324
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "rmse": 8.981224120739256,
+      "mae": 6.740936555891238,
+      "n": 1324
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "rmse": 0.04837762928364452,
+      "mae": 0.035633685800604234,
+      "n": 1324
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "rmse": 8.449203261269773,
+      "mae": 6.3412638469284985,
+      "n": 1324
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "rmse": 0.04548508547872642,
+      "mae": 0.03395845921450151,
+      "n": 1324
+    }
+  ],
+  "per_bucket": [
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "bucket": "2-3 prior seasons",
+      "rmse": 11.548877669452246,
+      "mae": 8.221168142250846,
+      "n": 354
+    },
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 10.219821709799358,
+      "mae": 8.083234933022094,
+      "n": 170
+    },
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 10.853753929827565,
+      "mae": 7.761045809800803,
+      "n": 800
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "bucket": "2-3 prior seasons",
+      "rmse": 0.05106418627470085,
+      "mae": 0.0393048179680314,
+      "n": 354
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 0.0696173744814421,
+      "mae": 0.050794977368363824,
+      "n": 170
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 0.0440547967016071,
+      "mae": 0.0327188435826564,
+      "n": 800
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "bucket": "2-3 prior seasons",
+      "rmse": 7.159998972039907,
+      "mae": 5.40061400646531,
+      "n": 354
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 7.346679630766349,
+      "mae": 5.450118772516571,
+      "n": 170
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 7.51861081729122,
+      "mae": 5.7840559985833195,
+      "n": 800
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "bucket": "2-3 prior seasons",
+      "rmse": 0.03345220909695728,
+      "mae": 0.02733786199768663,
+      "n": 354
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 0.03649946129624522,
+      "mae": 0.029362958714762234,
+      "n": 170
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 0.03302467737994332,
+      "mae": 0.02595676769296634,
+      "n": 800
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "bucket": "2-3 prior seasons",
+      "rmse": 8.448915953597862,
+      "mae": 6.372881355932203,
+      "n": 354
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 9.89771215394512,
+      "mae": 7.823529411764706,
+      "n": 170
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 9.005068017511029,
+      "mae": 6.67375,
+      "n": 800
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "bucket": "2-3 prior seasons",
+      "rmse": 0.04712979433568848,
+      "mae": 0.03672033898305085,
+      "n": 354
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 0.07051687324154912,
+      "mae": 0.050676470588235295,
+      "n": 170
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 0.04282267214922488,
+      "mae": 0.03195625,
+      "n": 800
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "bucket": "2-3 prior seasons",
+      "rmse": 9.16882785685692,
+      "mae": 6.870527306967984,
+      "n": 354
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 9.89771215394512,
+      "mae": 7.823529411764706,
+      "n": 170
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 7.754452126216124,
+      "mae": 5.792083333333332,
+      "n": 800
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "bucket": "2-3 prior seasons",
+      "rmse": 0.0470492155939931,
+      "mae": 0.035972693032015064,
+      "n": 354
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "bucket": "rookie (1 prior season)",
+      "rmse": 0.07051687324154912,
+      "mae": 0.050676470588235295,
+      "n": 170
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "bucket": "veteran (4+ prior seasons)",
+      "rmse": 0.037253234386053276,
+      "mae": 0.029514583333333334,
+      "n": 800
+    }
+  ],
+  "calibration": [
+    {
+      "system": "knn",
+      "stat": "home_run",
+      "coverage": 0.8564954682779456,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    },
+    {
+      "system": "knn",
+      "stat": "woba",
+      "coverage": 0.8300604229607251,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    },
+    {
+      "system": "marcel",
+      "stat": "home_run",
+      "coverage": 0.845166163141994,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    },
+    {
+      "system": "marcel",
+      "stat": "woba",
+      "coverage": 0.8141993957703928,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    },
+    {
+      "system": "naive",
+      "stat": "home_run",
+      "coverage": 0.8821752265861027,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    },
+    {
+      "system": "naive",
+      "stat": "woba",
+      "coverage": 0.8277945619335347,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    },
+    {
+      "system": "trailing",
+      "stat": "home_run",
+      "coverage": 0.8474320241691843,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    },
+    {
+      "system": "trailing",
+      "stat": "woba",
+      "coverage": 0.7953172205438066,
+      "n_eval": 1324,
+      "band": "residual p10-p90, fit on folds < evaluated season"
+    }
+  ],
+  "knn_native_band": [
+    {
+      "stat": "home_run",
+      "coverage": 0.4871601208459215,
+      "n_eval": 1324,
+      "band": "knn native p10-p90 output"
+    },
+    {
+      "stat": "woba",
+      "coverage": 0.4705438066465257,
+      "n_eval": 1324,
+      "band": "knn native p10-p90 output"
+    }
+  ],
+  "config": {
+    "stats": [
+      "woba",
+      "home_run"
+    ],
+    "target_seasons": [
+      2022,
+      2023,
+      2024,
+      2025
+    ],
+    "fold_start": 2018,
+    "min_pa": 200,
+    "systems": [
+      "naive",
+      "trailing",
+      "marcel",
+      "knn"
+    ],
+    "trailing_window": 3,
+    "eligibility_window_years": 3,
+    "nominal_band": 0.8
+  },
+  "generated": "2026-08-08"
+}

@@ -58,6 +58,10 @@ data_pipeline/data/*.csv
 
 # --- Model artifacts (generated) ---
 backend/app/ml_models/*.json
+# ...except the backtest measurements, which back the numbers in
+# docs/BACKTEST.md and are served by /api/backtest/report + the KNN band
+# calibration disclosure. Regenerate with `python -m app.toolkit.backtest_report`.
+!backend/app/ml_models/backtest_results.json
 
 # --- Misc ---
 *.swp

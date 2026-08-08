@@ -1,5 +1,5 @@
 # backend/app/agent/sql_guard.py
-"""Isolated SQL safety layer for the NL->SQL path (AUDIT B1/B2).
+"""Isolated SQL safety layer for the NL->SQL path.
 
 Every statement produced by the LLM planner must pass ``guard_sql()`` before
 it is executed. The checks are pure string/token analysis with no database
@@ -308,10 +308,14 @@ def _extract_tables(tokens):
 
 def tables_in_from_join(sql):
     """Every table referenced in FROM or JOIN, schema prefix removed,
-    deduplicated in first-seen order. This is the B1 fix: FROM tables are
-    detected (the old substring scan compared a 5-char slice against the
-    6-char ``" from "`` and never matched), comma lists and derived tables
-    are handled, and the result is validated in full by guard_sql()."""
+    deduplicated in first-seen order.
+
+    This replaced a substring scan that compared a 5-char slice against the
+    6-char ``" from "`` — a test that could never be true, so FROM tables
+    went undetected and therefore unchecked against the allowlist (a
+    whitelist bypass; see README "What the audit found"). Comma lists,
+    aliases and derived tables are handled here, and every name returned is
+    validated by guard_sql()."""
     masked = mask_string_literals(strip_sql_comments(sql))
     found = _extract_tables(_lex(masked))
     seen, unique = set(), []

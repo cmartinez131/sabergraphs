@@ -60,12 +60,13 @@ SYSTEM_LABELS = {
 def knn_band_calibration(results_path=RESULTS_JSON):
     """Calibration disclosure attached to every aging_knn response.
 
-    The Phase 4 backtest measured the empirical coverage of the KNN
+    The season-holdout backtest measured the empirical coverage of the KNN
     projection's own p10-p90 band at roughly half its nominal 80% for
-    next-season forecasts — the band is too narrow. Until it is replaced
-    with residual-based bands (Phase 6 candidate; needs per-horizon
-    backtests), the API labels it experimental and ships the measured
-    numbers with the payload.
+    next-season forecasts (48.7% HR / 47.1% wOBA, n=1324) — the band is too
+    narrow. Replacing it with residual-based bands needs per-horizon
+    backtests and is open work; until then the API labels the method
+    experimental and ships the measured numbers with every payload rather
+    than hiding them.
     """
     out = {
         "status": "experimental",

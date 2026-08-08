@@ -43,8 +43,8 @@ export default function AboutMe() {
                     <h3>Skills</h3>
                     <ul className="feature-list">
                         <li><b>Languages</b>: Python, JavaScript, SQL, C#</li>
-                        <li><b>ML/Data</b>: scikit-learn, pandas, NumPy, OpenAI API</li>
-                        <li><b>Web</b>: React, Node, FastAPI, PostgreSQL, Docker</li>
+                        <li><b>ML/Data</b>: scikit-learn, pandas, NumPy, Anthropic Claude API</li>
+                        <li><b>Web</b>: React, Node, FastAPI, PostgreSQL, Docker, Alembic</li>
                     </ul>
 
                     <h3>Why I Built This</h3>
