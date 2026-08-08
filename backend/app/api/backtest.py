@@ -3,13 +3,16 @@
 # Rolling-origin backtests for simple next-season forecasts.
 # Returns summary error metrics and a small bar chart so you can visualize MAE/RMSE
 # alongside p10–p90 coverage of an empirical residual band.
+import json
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 import numpy as np
 
-from ..db.database import get_db
+from ..db.database import engine, get_db
 from ..db.models import BattingStats
+from ..toolkit.backtest import RESULTS_JSON, SYSTEM_LABELS, run_season_holdout
 from ..toolkit.stats import (
     resolve_stat_column,
     col_exists,
@@ -21,6 +24,60 @@ from .schemas import BacktestRequest, ChartResponse, make_chart_response
 logger = logging.getLogger("app.backtest")
 
 router = APIRouter(prefix="/api", tags=["backtest"])
+
+# On-demand API comparisons default to the fast, vectorized systems; "knn"
+# does per-player work and belongs in the offline report.
+COMPARE_DEFAULT_SYSTEMS = ("naive", "trailing", "marcel")
+
+
+def run_compare(db, stat, start_year, end_year, min_pa, systems):
+    seasons = list(range(start_year, end_year + 1))
+    _records, results = run_season_holdout(
+        db=db,
+        engine=engine,
+        stats=(stat,),
+        target_seasons=seasons,
+        fold_start=start_year - 4,
+        min_pa=min_pa if min_pa is not None else 200,
+        systems=tuple(systems),
+    )
+    if not results["per_season"]:
+        raise HTTPException(
+            400,
+            "No eligible player-seasons for the requested window. "
+            "Check min_pa and that data exists for those seasons.",
+        )
+
+    series = []
+    for system in systems:
+        pts = [
+            {"x": r["season"], "y": r["rmse"]}
+            for r in results["per_season"]
+            if r["system"] == system and r["stat"] == stat
+        ]
+        if pts:
+            series.append({"id": SYSTEM_LABELS.get(system, system), "data": pts})
+
+    overall = {
+        r["system"]: r for r in results["overall"] if r["stat"] == stat
+    }
+    best = min(overall.values(), key=lambda r: r["rmse"]) if overall else None
+    narration = "Season-holdout backtest ({}–{}), RMSE by system for {}.".format(
+        start_year, end_year, stat_label(stat)
+    )
+    if best:
+        narration += " Best overall RMSE: {} ({:.4f}, n={}).".format(
+            SYSTEM_LABELS.get(best["system"], best["system"]), best["rmse"], best["n"]
+        )
+
+    meta = {
+        "title": "Forecast backtest — {} ({}–{})".format(
+            stat_label(stat), start_year, end_year
+        ),
+        "label_map": {stat: stat_label(stat)},
+        "results": results,
+    }
+    return series, meta, narration
 
 
 def run_backtest(db, stat, start_year, end_year, lookback, method, min_pa):
@@ -195,15 +252,25 @@ def run_backtest(db, stat, start_year, end_year, lookback, method, min_pa):
 @router.post("/backtest", response_model=ChartResponse)
 async def backtest_endpoint(body: BacktestRequest, db=Depends(get_db)):
     try:
-        series, meta, narration = run_backtest(
-            db=db,
-            stat=body.stat,
-            start_year=body.start_year,
-            end_year=body.end_year,
-            lookback=body.lookback,
-            method=body.method,
-            min_pa=body.min_pa,
-        )
+        if body.mode == "compare":
+            series, meta, narration = run_compare(
+                db=db,
+                stat=body.stat,
+                start_year=body.start_year,
+                end_year=body.end_year,
+                min_pa=body.min_pa,
+                systems=body.systems or list(COMPARE_DEFAULT_SYSTEMS),
+            )
+        else:
+            series, meta, narration = run_backtest(
+                db=db,
+                stat=body.stat,
+                start_year=body.start_year,
+                end_year=body.end_year,
+                lookback=body.lookback,
+                method=body.method,
+                min_pa=body.min_pa,
+            )
     except HTTPException:
         raise
     except Exception:
@@ -211,8 +278,26 @@ async def backtest_endpoint(body: BacktestRequest, db=Depends(get_db)):
         raise HTTPException(500, "Internal server error.")
 
     return make_chart_response(
-        chart_type="bar",
+        chart_type="bar" if body.mode == "single" else "line",
         series=series,
         narration=narration,
         meta=meta,
     )
+
+
+@router.get("/backtest/report")
+async def backtest_report():
+    """Precomputed season-holdout results (all four systems, including the
+    slow KNN run) as written by `python -m app.toolkit.backtest_report`."""
+    if not os.path.exists(RESULTS_JSON):
+        raise HTTPException(
+            404,
+            "No precomputed backtest results. Generate them with: "
+            "python -m app.toolkit.backtest_report",
+        )
+    try:
+        with open(RESULTS_JSON) as fh:
+            return json.load(fh)
+    except Exception:
+        logger.exception("Failed reading backtest results JSON")
+        raise HTTPException(500, "Internal server error.")

@@ -25,8 +25,18 @@ from ..toolkit.projections import (
     predict_player_above_avg_prob,
 )
 from ..toolkit.aging import project_stat_aging_knn
+from ..toolkit.backtest import knn_band_calibration
+from ..toolkit.marcel import marcel_project
 
+from ..toolkit.battracking import (
+    bat_speed_profile,
+    bat_speed_vs_production,
+    blast_leaderboard,
+)
 from .schemas import (
+    BatSpeedProductionRequest,
+    BatSpeedProfileRequest,
+    BlastLeaderboardRequest,
     ChartResponse,
     CompareRequest,
     PredictRequest,
@@ -90,11 +100,14 @@ async def predict(body: PredictRequest, db=Depends(get_db)):
                 "label_map": label_map_for([body.stat]),
                 "title": ttl,
                 "bands": {"p10": "lower", "p90": "upper"},
+                "band_calibration": knn_band_calibration(),
             }
             return make_chart_response(
                 "line",
                 series,
-                "Aging curve blended with KNN comparables.",
+                "Aging curve blended with KNN comparables. The p10–p90 band "
+                "is experimental: backtested coverage came in well below the "
+                "nominal 80% (details in meta.band_calibration).",
                 meta=meta,
             )
 
@@ -137,11 +150,44 @@ async def predict(body: PredictRequest, db=Depends(get_db)):
                 meta=meta,
             )
 
-        # Baseline: single-bar projection (trailing average)
+        # Marcel (default): 5/4/3 recency weights, league-mean regression,
+        # age adjustment. Falls back to the trailing mean when the player has
+        # no seasons in the 3-year window.
+        if body.method == "marcel":
+            proj = marcel_project(db, body.player_id, body.stat)
+            if proj is not None:
+                series = [{
+                    "id": "Projected " + body.stat,
+                    "data": [{"x": "Next season", "y": proj["proj_value"]}],
+                }]
+                meta = {
+                    "label_map": label_map_for([body.stat]),
+                    "title": "Projected " + stat_label(body.stat),
+                    "method": "marcel",
+                    "marcel": {
+                        k: proj[k]
+                        for k in ("target_year", "proj_rate", "proj_pa", "age_mult",
+                                  "age_at_target", "weighted_pa", "n_seasons",
+                                  "league_rate", "weights", "ballast_pa", "kind")
+                    },
+                }
+                return make_chart_response(
+                    "bar", series,
+                    "Marcel projection: 3-season 5/4/3 weighting, regressed to "
+                    "the league mean, age-adjusted.",
+                    meta=meta,
+                )
+
+        # Baseline: single-bar projection (trailing average) — also the
+        # fallback when Marcel has no recent history.
         v = predict_player_stat(db, body.player_id, body.stat, body.years)
         y = v if v is not None else 0.0
         series = [{"id": "Projected " + body.stat, "data": [{"x": "Next season", "y": y}]}]
-        meta = {"label_map": label_map_for([body.stat]), "title": "Projected " + stat_label(body.stat)}
+        meta = {
+            "label_map": label_map_for([body.stat]),
+            "title": "Projected " + stat_label(body.stat),
+            "method": "trailing_mean",
+        }
         return make_chart_response("bar", series, "Baseline projection uses trailing average.", meta=meta)
 
     except ValueError as e:
@@ -298,3 +344,51 @@ async def api_compare_multi(body: CompareMultiRequest, db=Depends(get_db)):
             "facet", [], "Multi-stat over time — rendered as facets.", meta=res.get("meta"), facets=res.get("facets")
         )
     return make_chart_response(res["chart_type"], res["series"], "Flexible comparison.", res.get("meta"))
+
+
+# ----------------- Bat-tracking mart endpoints (Phase 5) -----------------
+
+@router.post("/bat_speed_profile", response_model=ChartResponse)
+async def api_bat_speed_profile(body: BatSpeedProfileRequest, db=Depends(get_db)):
+    try:
+        res = bat_speed_profile(
+            db, player=body.player, season=body.season, min_swings=body.min_swings
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return make_chart_response(
+        res["chart_type"], res["series"],
+        "Percentile skill profile vs qualified swingers.", meta=res.get("meta"),
+    )
+
+
+@router.post("/blast_leaderboard", response_model=ChartResponse)
+async def api_blast_leaderboard(body: BlastLeaderboardRequest, db=Depends(get_db)):
+    try:
+        res = blast_leaderboard(
+            db, season=body.season, stat=body.stat, limit=body.limit,
+            min_swings=body.min_swings, order=body.order,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return make_chart_response(
+        res["chart_type"], res["series"],
+        "Bat-tracking leaderboard with a minimum-swing qualifier.",
+        meta=res.get("meta"),
+    )
+
+
+@router.post("/bat_speed_production", response_model=ChartResponse)
+async def api_bat_speed_production(body: BatSpeedProductionRequest, db=Depends(get_db)):
+    try:
+        res = bat_speed_vs_production(
+            db, season=body.season, production_stat=body.production_stat,
+            min_swings=body.min_swings,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return make_chart_response(
+        res["chart_type"], res["series"],
+        "Mean production by bat-speed bin across the league.",
+        meta=res.get("meta"),
+    )

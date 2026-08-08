@@ -29,17 +29,29 @@ Guard rules, in order:
  8. System surfaces are rejected: information_schema and any pg_* token.
  9. Every table referenced in FROM/JOIN — including comma-separated FROM
     lists, aliases, and derived tables — must be in ALLOWED_TABLES.
-10. Join alignment: joins must mention player_id; joins involving
-    player_features/player_seasons must also align on year.
+10. Join alignment: joins must mention player_id (or batter_mlbam, the
+    same MLBAM id space used by the pitch-level mart tables); joins
+    involving player_features/player_seasons must also align on year, and
+    joins involving mart tables must align on season.
 11. A hard LIMIT cap (default 200) is enforced on the top-level statement.
+
+Note the raw_/staging_ pipeline layers are deliberately NOT allowlisted:
+the NL->SQL surface only sees the curated mart tables.
 """
+
+# Season-grain mart tables produced by the pitch-level pipeline
+# (data_pipeline/ingest). Keyed on (batter_mlbam, season).
+MART_TABLES = frozenset({
+    "mart_batter_pitch_season",
+    "mart_bat_tracking_season",
+})
 
 ALLOWED_TABLES = frozenset({
     "batting_stats",
     "player_profiles",
     "player_features",
     "player_seasons",
-})
+}) | MART_TABLES
 
 DEFAULT_MAX_ROWS = 200
 
@@ -403,10 +415,14 @@ def guard_sql(sql, allowed_tables=ALLOWED_TABLES, max_rows=DEFAULT_MAX_ROWS):
         if table not in allowed_tables:
             raise SqlGuardError(f"Table not allowed: {table}")
 
-    if "join" in pieces and "player_id" not in pieces:
-        raise SqlGuardError("Joins must include player_id equality.")
+    if "join" in pieces and "player_id" not in pieces \
+            and "batter_mlbam" not in pieces:
+        raise SqlGuardError("Joins must include player_id/batter_mlbam equality.")
     if {"player_features", "player_seasons"} & set(used_tables) \
             and "year" not in pieces:
         raise SqlGuardError("Joins with features/seasons must align on year.")
+    if MART_TABLES & set(used_tables) and len(set(used_tables)) > 1 \
+            and "season" not in pieces:
+        raise SqlGuardError("Joins with mart tables must align on season.")
 
     return _enforce_limit(clean, masked, max_rows)

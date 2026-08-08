@@ -46,6 +46,13 @@ from ..toolkit.projections import (
     predict_player_stat_series,
 )
 from ..toolkit.aging import project_stat_aging_knn
+from ..toolkit.backtest import knn_band_calibration
+from ..toolkit.battracking import (
+    bat_speed_profile,
+    bat_speed_vs_production,
+    blast_leaderboard,
+)
+from ..toolkit.marcel import marcel_project
 from .common import (
     ANTHROPIC_MODEL,
     STAT_ALIASES,
@@ -283,6 +290,9 @@ def build_system_instructions(allowed_stats):
         - leaderboard_range: args {{stat:str, start_year:int, end_year:int, limit:int?, agg:'sum'|'avg'?, order:'asc'|'desc'?}}
         - leaderboard_by_year: args {{stat:str, start_year:int, end_year:int, limit:int?, order:'asc'|'desc'?, min_pa:int?}}
         - predict: args {{player:string|int, stat:str, years:int, horizon:int?, method:str?}}
+        - bat_speed_profile: args {{player:string|int, season:int?, min_swings:int?}}
+        - blast_leaderboard: args {{stat:'blast_rate'|'squared_up_rate'|'avg_bat_speed'|'fast_swing_rate'|'avg_swing_length'|'whiff_rate'|'batter_run_value', season:int?, limit:int?, min_swings:int?, order:'asc'|'desc'?}}
+        - bat_speed_production: args {{season:int?, production_stat:str?, min_swings:int?}}
         RESPONSE: JSON only, no prose. Example:
         {{"tool":"compare","args":{{"players":["David Ortiz","Torii Hunter"],"stat":"home_run","year":2015}}}}
         RULES:
@@ -295,7 +305,12 @@ def build_system_instructions(allowed_stats):
         - 'top/bottom N STAT each year between Y1 and Y2' or 'single-season leaders Y1–Y2' -> leaderboard_by_year.
         - 'compare in YEAR' -> compare+year (bar). Year range -> compare+start_year/end_year (line).
         - 'compare X, Y, Z across HR and wOBA in YEAR' -> compare_multi with stats=[...].
-        - 'project/predict/forecast' -> predict. Prefer method='aging_knn' for multi-year forecasts.
+        - 'project/predict/forecast' -> predict. Prefer method='aging_knn' for multi-year forecasts;
+        single-season projections default to method='marcel'.
+        - Bat tracking (data exists 2024+ ONLY): 'PLAYER bat speed / swing profile' -> bat_speed_profile.
+        'fastest bat speed / top blast rate / squared-up leaderboard, min N swings' -> blast_leaderboard
+        with min_swings=N (stat one of the listed tracking stats). 'bat speed vs production/woba' ->
+        bat_speed_production. These tools take season (not year) and min_swings (not min_pa).
 
         QUALIFICATION:
         - For rate stats (any *_percent plus AVG/OBP/SLG/OPS/wOBA/BABIP and x-versions), do NOT add a custom min_pa unless the user explicitly asks.
@@ -1432,6 +1447,46 @@ def run_prompt(db, text, debug=False):
             out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
         return _finalize(out)
 
+    # ---------- bat-tracking tools (mart_bat_tracking_season, 2024+) ----------
+    if tool == "bat_speed_profile":
+        res = bat_speed_profile(
+            db,
+            player=args.get("player") or "",
+            season=args.get("season"),
+            min_swings=int(args.get("min_swings") or 50),
+        )
+        out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
+        who = args.get("player") or "player"
+        draft = f"Bat-tracking skill percentiles for {who} vs qualified swingers."
+        return _finalize(out, draft=draft)
+
+    if tool == "blast_leaderboard":
+        res = blast_leaderboard(
+            db,
+            season=args.get("season"),
+            stat=args.get("stat") or "blast_rate",
+            limit=int(args.get("limit") or 10),
+            min_swings=int(args.get("min_swings") or 100),
+            order=args.get("order") or "desc",
+        )
+        out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
+        draft = res.get("meta", {}).get("title", "Bat-tracking leaderboard.")
+        return _finalize(out, draft=draft)
+
+    if tool == "bat_speed_production":
+        res = bat_speed_vs_production(
+            db,
+            season=args.get("season"),
+            production_stat=args.get("production_stat") or "woba",
+            min_swings=int(args.get("min_swings") or 100),
+        )
+        out = {"chart_type": res["chart_type"], "series": res["series"], "meta": res.get("meta", {})}
+        r = res.get("meta", {}).get("pearson_r")
+        draft = "Mean production by bat-speed bin across the league."
+        if r is not None:
+            draft += f" Player-level Pearson r = {r:.2f}."
+        return _finalize(out, draft=draft)
+
     # ---------- predict ----------
     if tool == "predict":
         player = args.get("player")
@@ -1468,11 +1523,15 @@ def run_prompt(db, text, debug=False):
                 "title": title,
                 "x_years": x_years,
                 "bands": {"p10": "lower", "p90": "upper"},
+                "band_calibration": knn_band_calibration(),
             }
             who = name_for_id(db, player_id) if player_id else (player or "player")
 
             out = {"chart_type": "line", "series": series, "meta": meta}
-            out["narration"] = build_aging_knn_narration(out, who, stat, meta_extra or {}, h)
+            out["narration"] = build_aging_knn_narration(out, who, stat, meta_extra or {}, h) + (
+                " Note: the p10–p90 band is experimental — backtested coverage "
+                "was well below the nominal 80% (docs/BACKTEST.md)."
+            )
 
             if debug:
                 out["ai_source"] = source
@@ -1495,13 +1554,31 @@ def run_prompt(db, text, debug=False):
             draft = narration_from_plan(db, plan) + answer_line
             return _finalize(out, forecasting=True, draft=draft)
 
-        v = predict_player_stat(db, player_id, stat, int(args.get("years") or 3))
-        y = v if v is not None else 0.0
+        # Single-season default: Marcel baseline (5/4/3 weighting, league-mean
+        # regression, age adjustment); trailing mean if no recent history.
+        proj = marcel_project(db, player_id, stat) if player_id else None
+        if proj is not None:
+            y = proj["proj_value"]
+            method_used = "marcel"
+        else:
+            v = predict_player_stat(db, player_id, stat, int(args.get("years") or 3))
+            y = v if v is not None else 0.0
+            method_used = "trailing_mean"
         out = {
             "chart_type": "bar",
-            "series": [{"id": "Projected " + stat, "data": [{"x": "Next season", "y": y}]}],
-            "meta": {"label_map": label_map_for([stat]), "title": "Projected " + stat_label(stat)},
+            "series": [{"id": "Projected " + stat, "data": [{"x": "Next season", "y": float(y)}]}],
+            "meta": {
+                "label_map": label_map_for([stat]),
+                "title": "Projected " + stat_label(stat),
+                "method": method_used,
+            },
         }
+        if proj is not None:
+            out["meta"]["marcel"] = {
+                k: proj[k]
+                for k in ("target_year", "proj_rate", "proj_pa", "age_mult",
+                          "n_seasons", "league_rate")
+            }
         draft = narration_from_plan(db, plan)
         return _finalize(out, forecasting=True, draft=draft)
 

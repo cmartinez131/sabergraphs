@@ -25,6 +25,7 @@ from .sql_guard import (
     SqlGuardError,
     guard_sql,
     strip_sql_comments,
+    tables_in_from_join,
     tokenize_identifiers,
 )
 
@@ -44,6 +45,9 @@ def build_catalog(db):
         "player_profiles": reflect_table_columns(db, "player_profiles"),
         "player_features": reflect_table_columns(db, "player_features"),
         "player_seasons": reflect_table_columns(db, "player_seasons"),
+        # Season-grain marts from the pitch-level pipeline (Phase 5)
+        "mart_batter_pitch_season": reflect_table_columns(db, "mart_batter_pitch_season"),
+        "mart_bat_tracking_season": reflect_table_columns(db, "mart_bat_tracking_season"),
     }
     # Ensure virtual OPS is available to the planner even if not a physical column
     if "on_base_plus_slg" not in catalog["batting_stats"]:
@@ -77,10 +81,13 @@ def _reverse_human_labels_to_columns(db, cols):
     return rev
 
 def build_alias_catalog(db, catalog):
-    """Build alias catalog filtered to present DB columns."""
+    """Build alias catalog filtered to present DB columns (batting_stats
+    plus the mart tables, so bat-tracking vocabulary resolves too)."""
     cols = set(catalog.get("batting_stats") or [])
+    cols |= set(catalog.get("mart_batter_pitch_season") or [])
+    cols |= set(catalog.get("mart_bat_tracking_season") or [])
     aliases = {k: v for k, v in ALIAS_BASE.items() if v in cols}
-    aliases.update(_reverse_human_labels_to_columns(db, cols))
+    aliases.update(_reverse_human_labels_to_columns(db, set(catalog.get("batting_stats") or [])))
     return aliases
 
 
@@ -112,6 +119,23 @@ Join & alignment rules:
     JOIN player_features f ON f.player_id = b.player_id AND f.year = b.year
 - player_profiles is per-player; join on player_id only.
 - Compute OPS as (on_base_percent + slg_percent) AS on_base_plus_slg when needed.
+
+Mart tables (pitch-level aggregates):
+- mart_batter_pitch_season and mart_bat_tracking_season are keyed on (batter_mlbam, season).
+  batter_mlbam is the SAME id space as batting_stats.player_id; season plays the role of year.
+- To join a mart to batting_stats: ON b.player_id = m.batter_mlbam AND b.year = m.season.
+- Bat-tracking columns (avg_bat_speed, blast_rate, squared_up_rate, avg_swing_length,
+  fast_swing_rate, competitive_swings, swords) live in mart_bat_tracking_season and
+  exist ONLY for seasons 2024-2025 (Statcast bat tracking started in 2024).
+- Pitch-derived columns (whiff_rate, chase_rate, contact_rate, zone_rate, avg_exit_velo,
+  hard_hit_rate, barrel_rate, avg_launch_angle) live in mart_batter_pitch_season for
+  seasons 2021-2025.
+- For minimum-swing qualifiers use competitive_swings >= N (bat tracking) or swings >= N
+  (pitch mart) — NOT plate_appearances, which the marts do not have.
+- To compare one player against the league in a mart, use a CASE bucket + AVG:
+    SELECT CASE WHEN full_name ILIKE '%<player>%' THEN full_name ELSE 'League average' END AS name,
+           AVG(<col>) AS <col>
+    FROM mart_bat_tracking_season WHERE season = <year> GROUP BY 1;
 
 Constraints:
 - Output JSON only (no prose), with exactly these keys: sql, x, y, chart_type, assumptions.
@@ -199,6 +223,33 @@ def fewshot_messages(db, catalog, alias_catalog, user_text):
             ),
             "x": "pos", "y": "on_base_plus_slg", "chart_type": "bar",
             "assumptions": "OPS = OBP + SLG; grouped by position."
+        })},
+
+        # Bat-tracking mart: leaderboard with a min-swing qualifier
+        {"role": "user", "content": "fastest average bat speed in 2025, minimum 100 competitive swings"},
+        {"role": "assistant", "content": json.dumps({
+            "sql": (
+                "SELECT full_name AS name, avg_bat_speed "
+                "FROM mart_bat_tracking_season "
+                "WHERE season = 2025 AND competitive_swings >= 100 "
+                "ORDER BY avg_bat_speed DESC LIMIT 10;"
+            ),
+            "x": "name", "y": "avg_bat_speed", "chart_type": "bar",
+            "assumptions": "Bat tracking data exists 2024+; qualifier on competitive_swings."
+        })},
+
+        # Bat-tracking mart: single player vs league average (CASE bucket)
+        {"role": "user", "content": "compare Aaron Judge's blast rate to league average"},
+        {"role": "assistant", "content": json.dumps({
+            "sql": (
+                "SELECT CASE WHEN full_name ILIKE '%judge%' THEN full_name "
+                "ELSE 'League average' END AS name, AVG(blast_rate) AS blast_rate "
+                "FROM mart_bat_tracking_season "
+                "WHERE season = 2025 AND competitive_swings >= 100 "
+                "GROUP BY 1 ORDER BY blast_rate DESC;"
+            ),
+            "x": "name", "y": "blast_rate", "chart_type": "bar",
+            "assumptions": "Latest bat-tracking season (2025); league average over qualified swingers."
         })},
 
         # Steer single-player + range to clean per-year line (alias: 'slugging %' → slg_percent)
@@ -402,6 +453,14 @@ def analyst_noun_for(stat_slug):
     return stat_label(stat_slug)
 
 
+def y_columns_from(y_key):
+    if isinstance(y_key, str) and y_key:
+        return [y_key]
+    if isinstance(y_key, list):
+        return [str(c) for c in y_key if c]
+    return []
+
+
 def build_summary(chart_type, series, x_key, y_key, prompt_text):
     """Single-sentence conclusion that considers ALL series (not just the first)."""
     if isinstance(y_key, str):
@@ -426,9 +485,23 @@ def build_summary(chart_type, series, x_key, y_key, prompt_text):
     if not all_pts:
         return "No results."
 
-    best = max(all_pts, key=lambda r: r["y"])
-    leaders = [r for r in all_pts if abs(r["y"] - best["y"]) <= 1e-12]
-    names = sorted({str(r["id"]) for r in leaders if r.get("id")}) or [str(best.get("x"))]
+    # Leaderboard-shaped payloads have series whose ids are STAT slugs (one
+    # series per selected column) — there the subject is the x value of the
+    # best point in the PRIMARY stat's series, and other stat series (e.g. a
+    # sprint_speed filter column) must not win the max. Only when series ids
+    # are entities (players) do the ids name the subject.
+    stat_ids = {str(c) for c in y_columns_from(y_key)}
+    series_are_stats = bool(series) and all(
+        str(s.get("id")) in stat_ids for s in series
+    )
+    if series_are_stats:
+        pool = [r for r in all_pts if str(r["id"]) == str(stat_slug)] or all_pts
+        best = max(pool, key=lambda r: r["y"])
+        names = [str(best.get("x"))]
+    else:
+        best = max(all_pts, key=lambda r: r["y"])
+        leaders = [r for r in all_pts if abs(r["y"] - best["y"]) <= 1e-12]
+        names = sorted({str(r["id"]) for r in leaders if r.get("id")}) or [str(best.get("x"))]
 
     years = extract_years(prompt_text)
     if len(years) == 1:
@@ -464,8 +537,23 @@ def run_nl2sql(db, text):
     wantsRateQualification = any(is_rate_stat(col) for col in y_columns)
     plateAppearanceColumnName = _pa_column_name(db)
 
+    # Auto-qualification only applies when the query actually reads
+    # batting_stats (mart tables have no plate_appearances column) and the
+    # planner didn't already emit an explicit PA filter from the prompt.
+    try:
+        referenced_tables = set(tables_in_from_join(sql))
+    except SqlGuardError:
+        referenced_tables = set()
+    touches_batting_stats = "batting_stats" in referenced_tables
+    has_explicit_pa_filter = (
+        plateAppearanceColumnName
+        and plateAppearanceColumnName in strip_sql_comments(sql).lower()
+    )
+
     qualificationInfo = None
-    if single_year_for_qualification is not None and wantsRateQualification and plateAppearanceColumnName:
+    if single_year_for_qualification is not None and wantsRateQualification \
+            and plateAppearanceColumnName and touches_batting_stats \
+            and not has_explicit_pa_filter:
         min_pa = _qualified_pa_threshold(int(single_year_for_qualification))
         sql = inject_min_pa_condition(sql, plateAppearanceColumnName, min_pa)
         qualificationInfo = {

@@ -112,11 +112,20 @@ STAT_ALIASES = {
     'hp_to_1b': ['home to first', 'home-to-first', 'htf'],
     'n_outs_above_average': ['oaa', 'outs above average'],
     'avg_swing_speed': ['swing speed'],
-    'avg_swing_length': ['swing length'],
+    'avg_swing_length': ['swing length', 'average swing length', 'avg swing length'],
     'fast_swing_rate': ['fast swing%', 'fast swing rate'],
     'squared_up_contact': ['squared-up contact', 'squared up contact%'],
     'squared_up_swing': ['squared-up swing', 'squared up swing%'],
     'primary_position': ['position'],
+    # --- bat-tracking mart vocabulary (mart_bat_tracking_season /
+    #     mart_batter_pitch_season; 2024+ bat-tracking era) ---
+    'avg_bat_speed': ['bat speed', 'average bat speed', 'avg bat speed'],
+    'blast_rate': ['blast rate', 'blasts', 'blast%', 'blast'],
+    'squared_up_rate': ['squared up rate', 'squared-up rate', 'squared up%',
+                        'squared up', 'squared-up'],
+    'competitive_swings': ['competitive swings', 'competitive swing count'],
+    'batter_run_value': ['batter run value', 'swing run value'],
+    'swords': ['swords', 'sword count'],
 }
 
 

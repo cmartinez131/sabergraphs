@@ -354,3 +354,113 @@ def test_readonly_url_swaps_credentials_only():
 def test_allowed_tables_frozen():
     assert isinstance(ALLOWED_TABLES, frozenset)
     assert "batting_stats" in ALLOWED_TABLES
+
+
+# ----------------------------------------------------------------------
+# Mart-table allowlist expansion (Phase 5): the season-grain mart tables
+# are allowed; the raw_/staging_ pipeline layers stay rejected.
+# ----------------------------------------------------------------------
+MART_LEGITIMATE = [
+    pytest.param(
+        "SELECT full_name AS name, avg_bat_speed "
+        "FROM mart_bat_tracking_season "
+        "WHERE season = 2025 AND competitive_swings >= 100 "
+        "ORDER BY avg_bat_speed DESC LIMIT 10;",
+        id="mart-bat-speed-leaderboard",
+    ),
+    pytest.param(
+        "SELECT full_name AS name, blast_rate "
+        "FROM mart_bat_tracking_season "
+        "WHERE season = 2025 AND full_name ILIKE '%judge%' LIMIT 5;",
+        id="mart-single-table-filter",
+    ),
+    pytest.param(
+        "SELECT m.full_name AS name, m.avg_bat_speed, b.woba "
+        "FROM mart_bat_tracking_season m "
+        "JOIN batting_stats b ON b.player_id = m.batter_mlbam "
+        "AND b.year = m.season "
+        "WHERE m.season = 2025 AND m.competitive_swings >= 100 "
+        "ORDER BY m.avg_bat_speed DESC LIMIT 15;",
+        id="mart-join-batting-on-mlbam-and-season",
+    ),
+    pytest.param(
+        "SELECT p.full_name AS name, p.barrel_rate, t.blast_rate "
+        "FROM mart_batter_pitch_season p "
+        "JOIN mart_bat_tracking_season t "
+        "ON t.batter_mlbam = p.batter_mlbam AND t.season = p.season "
+        "WHERE p.season = 2024 LIMIT 20;",
+        id="mart-to-mart-join",
+    ),
+    pytest.param(
+        "SELECT CASE WHEN full_name ILIKE '%judge%' THEN full_name "
+        "ELSE 'League average' END AS name, AVG(blast_rate) AS blast_rate "
+        "FROM mart_bat_tracking_season WHERE season = 2025 "
+        "GROUP BY 1;",
+        id="mart-player-vs-league-case-aggregate",
+    ),
+]
+
+MART_ADVERSARIAL = [
+    # Pipeline layers below the marts must stay unreachable.
+    pytest.param(
+        "SELECT * FROM raw_statcast_pitches LIMIT 5",
+        id="raw-pitch-table-rejected",
+    ),
+    pytest.param(
+        "SELECT * FROM stg_statcast_pitches LIMIT 5",
+        id="staging-view-rejected",
+    ),
+    pytest.param(
+        "SELECT * FROM ingest_watermarks",
+        id="watermark-table-rejected",
+    ),
+    pytest.param(
+        "SELECT m.avg_bat_speed FROM mart_bat_tracking_season m "
+        "JOIN raw_statcast_pitches r ON r.batter = m.batter_mlbam "
+        "AND r.season = m.season",
+        id="mart-joined-to-raw-rejected",
+    ),
+    # Join alignment for marts.
+    pytest.param(
+        "SELECT m.avg_bat_speed, b.woba FROM mart_bat_tracking_season m "
+        "JOIN batting_stats b ON b.player_id = m.batter_mlbam",
+        id="mart-join-without-season-alignment",
+    ),
+    pytest.param(
+        "SELECT m.avg_bat_speed, b.woba FROM mart_bat_tracking_season m "
+        "JOIN batting_stats b ON b.full_name = m.full_name "
+        "AND b.year = m.season",
+        id="mart-join-on-name-not-id",
+    ),
+    # The old attack classes still fail against mart tables.
+    pytest.param(
+        "SELECT avg_bat_speed FROM mart_bat_tracking_season; "
+        "DROP TABLE mart_bat_tracking_season",
+        id="mart-multi-statement",
+    ),
+    pytest.param(
+        "SELECT avg_bat_speed FROM mart_bat_tracking_season "
+        "UNION SELECT usename FROM pg_user",
+        id="mart-union-into-catalog",
+    ),
+]
+
+
+@pytest.mark.parametrize("query", MART_LEGITIMATE)
+def test_mart_legitimate_query_passes(query):
+    result = guard_sql(query)
+    assert result.lower().lstrip().startswith("select")
+    assert result.rstrip().endswith(";")
+
+
+@pytest.mark.parametrize("payload", MART_ADVERSARIAL)
+def test_mart_adversarial_rejected(payload):
+    with pytest.raises(SqlGuardError):
+        guard_sql(payload)
+
+
+def test_mart_tables_in_allowlist_but_raw_absent():
+    assert "mart_batter_pitch_season" in ALLOWED_TABLES
+    assert "mart_bat_tracking_season" in ALLOWED_TABLES
+    assert "raw_statcast_pitches" not in ALLOWED_TABLES
+    assert "ingest_watermarks" not in ALLOWED_TABLES

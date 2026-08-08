@@ -3,7 +3,7 @@
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 # --------------------------
 # Config knobs (safe defaults)
@@ -17,15 +17,21 @@ DEFAULT_END_YEAR = 2025
 # Small guardrail for division by zero in ratio math
 EPS = 1e-9
 
+# Sentinel year bound used when no max_year cutoff is requested.
+NO_YEAR_CAP = 9999
+
+
+def _year_cap(max_year):
+    """Normalize an optional training-data cutoff. `max_year` exists so the
+    backtest harness can evaluate this system honestly: with max_year=N-1 no
+    query may read seasons >= N. Default (None) = production behavior, all
+    available seasons."""
+    return int(max_year) if max_year is not None else NO_YEAR_CAP
+
 
 def _table_columns(engine, table_name):
-    sql = text("""
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name = :t
-    """)
-    df = pd.read_sql(sql, engine, params={"t": table_name})
-    return set(df["column_name"].tolist())
+    # Dialect-agnostic (works on Postgres and the sqlite test fixtures).
+    return {c["name"] for c in inspect(engine).get_columns(table_name)}
 
 
 def _ensure_stat_column(engine, stat):
@@ -35,17 +41,21 @@ def _ensure_stat_column(engine, stat):
     return stat
 
 
-def _fetch_player_history(engine, player_id, stat):
+def _fetch_player_history(engine, player_id, stat, max_year=None):
     sql = text(
         """
         SELECT year, player_age, plate_appearances, {stat} AS v
         FROM batting_stats
         WHERE player_id = :pid
           AND {stat} IS NOT NULL
+          AND year <= :max_year
         ORDER BY year ASC
         """.format(stat=stat)
     )
-    df = pd.read_sql(sql, engine, params={"pid": int(player_id)})
+    df = pd.read_sql(
+        sql, engine,
+        params={"pid": int(player_id), "max_year": _year_cap(max_year)},
+    )
     # Clean up types
     for c in ("year", "player_age", "plate_appearances"):
         if c in df.columns:
@@ -55,7 +65,9 @@ def _fetch_player_history(engine, player_id, stat):
     return df
 
 
-def _league_age_curve(engine, stat, min_pa=DEFAULT_MIN_PA, y0=DEFAULT_START_YEAR, y1=DEFAULT_END_YEAR):
+def _league_age_curve(engine, stat, min_pa=DEFAULT_MIN_PA, y0=DEFAULT_START_YEAR, y1=DEFAULT_END_YEAR, max_year=None):
+    if max_year is not None:
+        y1 = min(int(y1), int(max_year))
     # Build league mean by age across the window (filtering for min PA)
     sql = text(
         """
@@ -136,7 +148,7 @@ def _standardize(df, cols):
     return dfz, mu, sd
 
 
-def _candidate_snapshot_df(engine, stat, age0, min_pa):
+def _candidate_snapshot_df(engine, stat, age0, min_pa, max_year=None):
     """
     Get one row per player around age0 (nearest age in {age0-1, age0, age0+1}).
     Pull features for KNN.
@@ -162,10 +174,19 @@ def _candidate_snapshot_df(engine, stat, age0, min_pa):
         FROM batting_stats b
         WHERE b.{stat} IS NOT NULL
           AND b.player_age BETWEEN :a0m1 AND :a0p1
+          AND b.year <= :max_year
           AND (b.plate_appearances IS NULL OR b.plate_appearances >= :min_pa)
         """.format(stat=stat)
     )
-    df = pd.read_sql(sql, engine, params={"a0m1": int(age0) - 1, "a0p1": int(age0) + 1, "min_pa": int(min_pa)})
+    df = pd.read_sql(
+        sql, engine,
+        params={
+            "a0m1": int(age0) - 1,
+            "a0p1": int(age0) + 1,
+            "min_pa": int(min_pa),
+            "max_year": _year_cap(max_year),
+        },
+    )
     if df.empty:
         return df
 
@@ -189,11 +210,11 @@ def _candidate_snapshot_df(engine, stat, age0, min_pa):
     return df
 
 
-def _knn_comparables(engine, player_id, stat, base_age, min_pa, k):
+def _knn_comparables(engine, player_id, stat, base_age, min_pa, k, max_year=None):
     """
     Return candidate DF with distances and a separate row (base_row) for the target player.
     """
-    cands = _candidate_snapshot_df(engine, stat, base_age, min_pa)
+    cands = _candidate_snapshot_df(engine, stat, base_age, min_pa, max_year=max_year)
     if cands.empty:
         return cands, None
 
@@ -202,7 +223,7 @@ def _knn_comparables(engine, player_id, stat, base_age, min_pa, k):
     base = cands[cands["player_id"] == int(player_id)]
     if base.empty:
         # Fallback: pull latest row for player for this stat
-        ph = _fetch_player_history(engine, player_id, stat)
+        ph = _fetch_player_history(engine, player_id, stat, max_year=max_year)
         ph = ph.sort_values("year")
         if ph.empty:
             return cands.iloc[0:0], None
@@ -213,6 +234,12 @@ def _knn_comparables(engine, player_id, stat, base_age, min_pa, k):
         base_row["player_age"] = base_age
         base_row["full_name"] = None
         base = base_row
+        # The history row lacks the candidate feature columns (batting_avg,
+        # profile fields, ...). Add them as NaN so feature assembly below can
+        # median-impute instead of raising KeyError.
+        for c in cands.columns:
+            if c not in base.columns:
+                base[c] = np.nan
     else:
         base = base.iloc[:1].copy()
 
@@ -274,10 +301,15 @@ def _knn_comparables(engine, player_id, stat, base_age, min_pa, k):
     return cands_z, base.iloc[0].to_dict()
 
 
-def _future_ratio_path_for_player(engine, pid, stat, base_age, horizon, age_cap, min_pa):
+def _future_ratio_path_for_player(engine, pid, stat, base_age, horizon, age_cap, min_pa, max_year=None):
     """
     For one comparable player, build ratios at Δ=1..h where ratio = stat(age0+Δ)/stat(age0).
     Returns list of floats length=horizon (with None when not computable).
+
+    NOTE on max_year: a comparable's "future" seasons are other players'
+    real past seasons — but in a backtest they must still be capped at the
+    training cutoff, otherwise the system peeks at seasons from the
+    evaluation period.
     """
     # Pull the nearest row to base_age (to define the base)
     sql = text(
@@ -286,11 +318,15 @@ def _future_ratio_path_for_player(engine, pid, stat, base_age, horizon, age_cap,
         FROM batting_stats
         WHERE player_id = :pid
           AND {stat} IS NOT NULL
+          AND year <= :max_year
         ORDER BY ABS(player_age - :age0), year
         LIMIT 1
         """.format(stat=stat)
     )
-    base_df = pd.read_sql(sql, engine, params={"pid": int(pid), "age0": float(base_age)})
+    base_df = pd.read_sql(
+        sql, engine,
+        params={"pid": int(pid), "age0": float(base_age), "max_year": _year_cap(max_year)},
+    )
     if base_df.empty:
         return [None] * int(horizon), None, None
     base_row = base_df.iloc[0]
@@ -309,9 +345,18 @@ def _future_ratio_path_for_player(engine, pid, stat, base_age, horizon, age_cap,
         WHERE player_id = :pid
           AND {stat} IS NOT NULL
           AND player_age BETWEEN :a0 AND :amax
+          AND year <= :max_year
         """.format(stat=stat)
     )
-    fut = pd.read_sql(sql2, engine, params={"pid": int(pid), "a0": int(base_age), "amax": int(age_cap)})
+    fut = pd.read_sql(
+        sql2, engine,
+        params={
+            "pid": int(pid),
+            "a0": int(base_age),
+            "amax": int(age_cap),
+            "max_year": _year_cap(max_year),
+        },
+    )
     fut["player_age"] = pd.to_numeric(fut["player_age"], errors="coerce")
     fut["v"] = pd.to_numeric(fut["v"], errors="coerce")
     fut = fut.dropna(subset=["player_age", "v"])
@@ -330,7 +375,7 @@ def _future_ratio_path_for_player(engine, pid, stat, base_age, horizon, age_cap,
     return ratios, base_year, base_age_actual
 
 
-def _aggregate_comparable_paths(engine, comp_df, stat, base_age, horizon, age_cap, min_pa):
+def _aggregate_comparable_paths(engine, comp_df, stat, base_age, horizon, age_cap, min_pa, max_year=None):
     """
     For all comparables, compute their ratio paths and aggregate p10/mean/p90 per Δ.
     """
@@ -346,7 +391,9 @@ def _aggregate_comparable_paths(engine, comp_df, stat, base_age, horizon, age_ca
     paths = []
     for _, row in comp_df.iterrows():
         rid = int(row["player_id"])
-        r, _, _ = _future_ratio_path_for_player(engine, rid, stat, base_age, horizon, age_cap, min_pa)
+        r, _, _ = _future_ratio_path_for_player(
+            engine, rid, stat, base_age, horizon, age_cap, min_pa, max_year=max_year
+        )
         paths.append(r)
 
     # transpose-like aggregation
@@ -415,6 +462,7 @@ def project_stat_aging_knn(
     age_cap=42,
     alpha_comps=0.5,
     min_pa=DEFAULT_MIN_PA,
+    max_year=None,
 ):
     """
     Implements your write-up:
@@ -422,6 +470,10 @@ def project_stat_aging_knn(
       2) Recent player trend direction (gentle multiplier)
       3) KNN comparables ratio paths
       4) Blend league & comps; output mean + p10/p90 bands over next N years
+
+    `max_year` caps every query at a training cutoff (year <= max_year) so
+    the backtest harness can evaluate this system without future leakage.
+    Default None = use all available data (production behavior).
 
     Returns:
       series (list of Nivo line series)
@@ -431,7 +483,7 @@ def project_stat_aging_knn(
     stat = _ensure_stat_column(db_engine, stat)
 
     # Player history to get baseline (latest) age & value
-    hist = _fetch_player_history(db_engine, player_id, stat)
+    hist = _fetch_player_history(db_engine, player_id, stat, max_year=max_year)
     if hist.empty:
         return [
             {"id": "Projected " + stat, "data": []}
@@ -474,15 +526,20 @@ def project_stat_aging_knn(
 
     # 1) League aging curve
     curve = _league_age_curve(db_engine, stat, min_pa=min_pa,
-                              y0=DEFAULT_START_YEAR, y1=DEFAULT_END_YEAR)
+                              y0=DEFAULT_START_YEAR, y1=DEFAULT_END_YEAR,
+                              max_year=max_year)
     league_ratios = _ratios_vs_age(curve, base_age, max_h, age_cap)
 
     # 2) Recent trend (gentle, one-shot)
     trend_mult = _recent_trend_multiplier(hist, lookback)
 
     # 3) KNN comps
-    comps_df, base_snapshot = _knn_comparables(db_engine, player_id, stat, base_age, min_pa, k)
-    comps_agg = _aggregate_comparable_paths(db_engine, comps_df, stat, base_age, max_h, age_cap, min_pa)
+    comps_df, base_snapshot = _knn_comparables(
+        db_engine, player_id, stat, base_age, min_pa, k, max_year=max_year
+    )
+    comps_agg = _aggregate_comparable_paths(
+        db_engine, comps_df, stat, base_age, max_h, age_cap, min_pa, max_year=max_year
+    )
 
     # Build blended ratios & bands
     mean_blend, p10_blend, p90_blend = [], [], []
@@ -538,5 +595,7 @@ def project_stat_aging_knn(
         "age_cap": int(age_cap),
         "bands": {"p10": "lower", "p90": "upper"},
     }
+    if max_year is not None:
+        meta["max_year"] = int(max_year)
 
     return series, meta

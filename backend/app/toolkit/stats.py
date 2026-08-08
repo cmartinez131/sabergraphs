@@ -220,6 +220,23 @@ STAT_LABELS = {
     "player_age": "Age",
     "player_id": "Player ID",
     "year": "Year",
+
+    # Bat-tracking marts (mart_bat_tracking_season / mart_batter_pitch_season);
+    # avg_swing_length / fast_swing_rate / swords already labeled above.
+    "avg_bat_speed": "Avg Bat Speed (mph)",
+    "blast_rate": "Blast Rate",
+    "squared_up_rate": "Squared-Up Rate",
+    "competitive_swings": "Competitive Swings",
+    "batter_run_value": "Batter Run Value",
+    "whiff_rate": "Whiff Rate",
+    "chase_rate": "Chase Rate",
+    "contact_rate": "Contact Rate",
+    "zone_rate": "Zone Rate",
+    "avg_exit_velo": "Avg Exit Velo (mph)",
+    "hard_hit_rate": "Hard-Hit Rate",
+    "barrel_rate": "Barrel Rate",
+    "avg_launch_angle": "Avg Launch Angle (°)",
+    "season": "Season",
 }
 
 # ---- Rate stats where "qualified" leaderboards should auto-apply MLB PA threshold

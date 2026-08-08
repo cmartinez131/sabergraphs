@@ -19,6 +19,9 @@ BASEBALL_POSITIVE = {
     "rbi", "rbis", "home run", "home runs", "hr", "stolen bases", "steals", "sb", "total bases", "tb", "hbp",
     "plate appearances", "pa",
     "sprint speed", "statcast",
+    # bat-tracking vocabulary (2024+ Statcast bat-tracking data)
+    "bat speed", "swing length", "swing speed", "blast", "blasts", "blast rate",
+    "squared up", "squared-up", "competitive swings", "fast swing", "swords", "whiff",
     # positions (concise)
     "1b", "2b", "3b", "ss", "rf", "lf", "cf", "c", "dh", "first base", "second base", "shortstop",
     # teams (common)

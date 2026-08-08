@@ -65,6 +65,20 @@ class ChartFacet(BaseModel):
     series: list[ChartSeries] = Field(default_factory=list)
 
 
+class RadarRow(BaseModel):
+    """One radar spoke: {"stat": <slug>, "<series name>": <value>, ...}.
+
+    Nivo's ResponsiveRadar consumes rows keyed by spoke ("stat") with one
+    extra key per polygon — a different shape from ChartSeries. Radar
+    endpoints were 500ing on response validation until this variant
+    existed in the contract.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    stat: str
+
+
 class ChartResponse(BaseModel):
     """Canonical payload rendered by the frontend ChartRenderer."""
 
@@ -72,7 +86,7 @@ class ChartResponse(BaseModel):
 
     schema_version: str = SCHEMA_VERSION
     chart_type: ChartType
-    series: list[ChartSeries] = Field(default_factory=list)
+    series: list[Union[ChartSeries, RadarRow]] = Field(default_factory=list)
     narration: str = ""
     meta: Optional[dict[str, Any]] = None
     facets: Optional[list[ChartFacet]] = None
@@ -129,7 +143,9 @@ class PredictRequest(BaseModel):
     stat: NonEmptyStr
     years: int = Field(3, ge=1)
     horizon: int = Field(1, ge=1)
-    method: Literal["baseline", "ml", "ml_prob", "aging_knn"] = "baseline"
+    # Marcel is the default single-season baseline (Phase 4);
+    # "baseline" = the older trailing-mean projection.
+    method: Literal["marcel", "baseline", "ml", "ml_prob", "aging_knn"] = "marcel"
     lookback: Optional[int] = None  # defaults to `years`
 
     @model_validator(mode="after")
@@ -229,6 +245,29 @@ class HistogramRequest(BaseModel):
     min_pa: Optional[int] = Field(None, ge=0)
 
 
+class BatSpeedProfileRequest(BaseModel):
+    """Bat-tracking skill profile (radar). `player` is an MLBAM id or a
+    name fragment; season defaults to the latest with bat-tracking data."""
+
+    player: Union[int, NonEmptyStr]
+    season: Optional[int] = None
+    min_swings: int = Field(50, ge=0)
+
+
+class BlastLeaderboardRequest(BaseModel):
+    stat: NonEmptyStr = "blast_rate"
+    season: Optional[int] = None
+    limit: int = Field(10, ge=1)
+    min_swings: int = Field(100, ge=0)
+    order: Literal["asc", "desc"] = "desc"
+
+
+class BatSpeedProductionRequest(BaseModel):
+    season: Optional[int] = None
+    production_stat: NonEmptyStr = "woba"
+    min_swings: int = Field(100, ge=0)
+
+
 class BacktestRequest(BaseModel):
     stat: NonEmptyStr
     start_year: int
@@ -236,6 +275,11 @@ class BacktestRequest(BaseModel):
     lookback: int = Field(3, ge=1)
     method: Literal["baseline", "linear"] = "baseline"
     min_pa: Optional[int] = Field(None, ge=0)
+    # mode="compare": season-holdout comparison of forecast systems
+    # (naive / trailing / marcel by default; add "knn" explicitly — it is
+    # slow enough that the offline report generator is the better home).
+    mode: Literal["single", "compare"] = "single"
+    systems: Optional[list[Literal["naive", "trailing", "marcel", "knn"]]] = None
 
     @field_validator("method", mode="before")
     @classmethod
