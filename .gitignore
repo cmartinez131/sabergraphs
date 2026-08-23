@@ -73,4 +73,5 @@ AGENTS.md
 .github/copilot-instructions.md
 
 # --- Misc ---
-*.swp*.docx
+*.swp
+*.docx
