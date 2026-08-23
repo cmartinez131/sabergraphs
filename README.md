@@ -12,7 +12,7 @@ The AI never generates a number. It figures out which players and stats you
 mean (and asks you to pick when a name is ambiguous, like the two Max
 Muncys), then either writes one SQL query that a safety layer validates
 before a read-only database role runs it, or calls built-in analytics like
-projections and rookie-season alignment. Every value on every chart comes
+projections and rookie-season comparisons. Every value on every chart comes
 out of PostgreSQL.
 
 Built with Python, FastAPI, SQLAlchemy, PostgreSQL, React, Nivo, Docker,
@@ -33,7 +33,7 @@ flowchart LR
 
 Some things worth knowing about the internals:
 
-- Every AI-generated query passes a SQL safety layer (single SELECT only,
+- Every query passes a SQL safety layer (single SELECT only,
   table allowlist, comment and quoting tricks rejected, hard row limit) and
   runs as a SELECT-only Postgres role with a 5 second timeout. That layer
   has a 69-test suite of SQL injection payloads.
@@ -116,13 +116,8 @@ CI runs pytest, ruff, eslint, and the frontend tests on every push.
 Personal, non-commercial project. Not affiliated with MLB.
 
 - Baseball Savant / MLB Advanced Media: Statcast data and season exports
-  ([MLB terms](http://gdx.mlb.com/components/copyright.txt)). The CSVs are
-  not redistributed here.
+  ([MLB terms](http://gdx.mlb.com/components/copyright.txt)). 
 - MLB Stats API: player identity and profiles.
 - [pybaseball](https://github.com/jldbc/pybaseball) (MIT).
 - [Chadwick Bureau Register](https://github.com/chadwickbureau/register)
-  (CC BY-SA 4.0) for the player ID crosswalk. It includes Retrosheet IDs:
-  "The information used here was obtained free of charge from and is
-  copyrighted by Retrosheet. Interested parties may contact Retrosheet at
-  www.retrosheet.org."
-- Marcel is Tom Tango's method; the implementation is mine.
+  (CC BY-SA 4.0) for the player ID references. It includes Retrosheet IDs
