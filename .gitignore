@@ -63,6 +63,14 @@ backend/app/ml_models/*.json
 # calibration disclosure. Regenerate with `python -m app.toolkit.backtest_report`.
 !backend/app/ml_models/backtest_results.json
 
+# --- Local dev tool files ---
+CLAUDE.md
+.claude/
+AGENTS.md
+.cursorrules
+.cursor/
+.aider*
+.github/copilot-instructions.md
+
 # --- Misc ---
 *.swp
-.claude/
