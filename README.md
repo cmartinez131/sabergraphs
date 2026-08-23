@@ -67,8 +67,8 @@ Some things worth knowing about the internals:
 Needs Docker. Python 3.11 on the host only for loading data.
 
 ```bash
-git clone https://github.com/cmartinez131/sabermetric-ai.git
-cd sabermetric-ai
+git clone https://github.com/cmartinez131/sabergraphs.git
+cd sabergraphs
 docker compose up --build
 # backend http://localhost:8000 (API docs at /docs), frontend http://localhost:3000
 ```

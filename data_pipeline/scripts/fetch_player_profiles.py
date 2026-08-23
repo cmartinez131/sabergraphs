@@ -36,7 +36,7 @@ END_YEAR = 2025
 SLEEP_MS = 60  # polite delay per API call
 
 BASE_URL = "https://statsapi.mlb.com/api/v1"
-HEADERS = {"User-Agent": "sabermetric-ai/1.0 (+https://example.com)"}
+HEADERS = {"User-Agent": "sabergraphs/1.0 (+https://github.com/cmartinez131/sabergraphs)"}
 
 
 def get_json(url, params=None, timeout=20):
