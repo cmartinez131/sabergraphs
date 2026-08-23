@@ -68,6 +68,10 @@ services:
       - ./frontend/public:/app/public
     environment:
       - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
+      # Bind-mount file events are unreliable on macOS Docker — poll instead,
+      # so source edits always recompile and hot-reload the browser.
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
     # Create React App's dev server wants a TTY.
     stdin_open: true
     tty: true

@@ -115,6 +115,25 @@ STAT_LABELS = {
     "linedrives_percent": "Line-Drive %",
     "popups_percent": "Popup %",
 
+    # Pitching (pitching_stats table)
+    "p_era": "ERA",
+    "p_win": "Wins",
+    "p_loss": "Losses",
+    "p_save": "Saves",
+    "p_blown_save": "Blown Saves",
+    "p_hold": "Holds",
+    "p_quality_start": "Quality Starts",
+    "p_complete_game": "Complete Games",
+    "p_shutout": "Shutouts",
+    "p_formatted_ip": "Innings Pitched",
+    "p_game": "Games Pitched",
+    "p_opp_batting_avg": "Opponent Batting Avg",
+    "p_opp_on_base_avg": "Opponent OBP",
+    "p_earned_run": "Earned Runs",
+    "ff_avg_speed": "Avg Fastball Velo (4-seam)",
+    "fastball_avg_speed": "Avg Fastball Velo",
+    "fastball_avg_spin": "Avg Fastball Spin",
+
     # Swing/bat metrics
     "avg_swing_speed": "Avg Swing Speed",
     "avg_swing_length": "Avg Swing Length",

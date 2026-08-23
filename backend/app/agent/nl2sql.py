@@ -42,12 +42,15 @@ def reflect_table_columns(db, table_name):
 def build_catalog(db):
     catalog = {
         "batting_stats": sorted(table_columns(db)),
+        "pitching_stats": reflect_table_columns(db, "pitching_stats"),
         "player_profiles": reflect_table_columns(db, "player_profiles"),
         "player_features": reflect_table_columns(db, "player_features"),
         "player_seasons": reflect_table_columns(db, "player_seasons"),
         # Season-grain marts from the pitch-level pipeline (Phase 5)
         "mart_batter_pitch_season": reflect_table_columns(db, "mart_batter_pitch_season"),
         "mart_bat_tracking_season": reflect_table_columns(db, "mart_bat_tracking_season"),
+        # Career-alignment view (rookie season, season number)
+        "player_season_index": reflect_table_columns(db, "player_season_index"),
     }
     # Ensure virtual OPS is available to the planner even if not a physical column
     if "on_base_plus_slg" not in catalog["batting_stats"]:
@@ -84,6 +87,7 @@ def build_alias_catalog(db, catalog):
     """Build alias catalog filtered to present DB columns (batting_stats
     plus the mart tables, so bat-tracking vocabulary resolves too)."""
     cols = set(catalog.get("batting_stats") or [])
+    cols |= set(catalog.get("pitching_stats") or [])
     cols |= set(catalog.get("mart_batter_pitch_season") or [])
     cols |= set(catalog.get("mart_bat_tracking_season") or [])
     aliases = {k: v for k, v in ALIAS_BASE.items() if v in cols}
@@ -92,11 +96,11 @@ def build_alias_catalog(db, catalog):
 
 
 # ----------------------- Prompt builder -----------------------
-def build_schema_prompt(db, catalog, alias_catalog):
+def build_schema_prompt(db, catalog, alias_catalog, resolved_block=""):
     def joinColumns(table_name):
         columns = ", ".join(sorted(catalog.get(table_name, [])))
         return f"{table_name}({columns})"
-    schema_lines = [joinColumns(t) for t in ALLOWED_TABLES]
+    schema_lines = [joinColumns(t) for t in sorted(ALLOWED_TABLES)]
     schema_block = "\n".join(schema_lines)
 
     alias_block = json.dumps(alias_catalog, ensure_ascii=False, indent=2)
@@ -120,6 +124,31 @@ Join & alignment rules:
 - player_profiles is per-player; join on player_id only.
 - Compute OPS as (on_base_percent + slg_percent) AS on_base_plus_slg when needed.
 
+Pitching (pitching_stats — pitcher seasons, keyed player_id + year):
+- Pitcher names live in pitching_stats.full_name; the p_-prefixed columns are
+  pitching stats (p_era, p_win, p_save, p_formatted_ip = innings pitched,
+  p_quality_start, p_hold, p_opp_batting_avg). Per-pitch-type arsenal columns
+  exist too (fastball_avg_speed, ff_avg_speed, sl_avg_speed, ...).
+- For p_era / p_opp_batting_avg LOWER is better: ORDER BY ... ASC.
+- Qualify starters with p_formatted_ip >= N (e.g. 100+ innings) and closers
+  with p_save; never use plate_appearances for pitchers.
+- batting_stats rows for the same player are BATTING stats (NL-era pitchers
+  batted) — answer pitching questions from pitching_stats only. Join the two
+  tables only for explicit two-way questions, ON player_id AND year.
+
+Career alignment (player_season_index — a VIEW at player_id x year grain):
+- season_number = 1..N career season rank; is_rookie_season = 1 marks the
+  player's rookie season (Rule 5.10 approximation: last season entered with
+  career AB <= 130). rookie_pre_panel = 1 means the player debuted before the
+  dataset starts — his rookie season is NOT in the data; never chart it.
+- "rookie season" filters: JOIN player_season_index i
+  ON i.player_id = b.player_id AND i.year = b.year
+  WHERE i.is_rookie_season = 1 AND i.rookie_pre_panel = 0
+- When comparing players across DIFFERENT years (rookie vs rookie, season N
+  vs season N), label rows as b.full_name || ' (' || b.year || ')' so the
+  chart shows whose year is whose. Never assume you know a player's rookie
+  year — always derive it from this view.
+{resolved_block}
 Mart tables (pitch-level aggregates):
 - mart_batter_pitch_season and mart_bat_tracking_season are keyed on (batter_mlbam, season).
   batter_mlbam is the SAME id space as batting_stats.player_id; season plays the role of year.
@@ -164,10 +193,27 @@ Return JSON:
 """.strip()
 
 
-def fewshot_messages(db, catalog, alias_catalog, user_text):
-    system_prompt = build_schema_prompt(db, catalog, alias_catalog)
+def fewshot_messages(db, catalog, alias_catalog, user_text, resolved_block=""):
+    system_prompt = build_schema_prompt(db, catalog, alias_catalog, resolved_block)
     return [
         {"role": "system", "content": system_prompt},
+
+        # Career-aligned comparison via the season-index view: rookie years
+        # come from data (is_rookie_season), never from world knowledge, and
+        # cross-year rows are labeled "Name (Year)".
+        {"role": "user", "content": "compare Aaron Judge and Anthony Volpe home runs in their rookie seasons"},
+        {"role": "assistant", "content": json.dumps({
+            "sql": (
+                "SELECT b.full_name || ' (' || b.year || ')' AS name, b.home_run "
+                "FROM batting_stats b "
+                "JOIN player_season_index i ON i.player_id = b.player_id AND i.year = b.year "
+                "WHERE i.is_rookie_season = 1 AND i.rookie_pre_panel = 0 "
+                "AND b.player_id IN (592450, 683011) "
+                "ORDER BY b.home_run DESC;"
+            ),
+            "x": "name", "y": "home_run", "chart_type": "bar",
+            "assumptions": "Rookie season from player_season_index; label carries each player's own year."
+        })},
 
         # Simple leaderboard — demonstrates alias usage (HR)
         {"role": "user", "content": "Top 10 home run hitters in 2024"},
@@ -225,6 +271,19 @@ def fewshot_messages(db, catalog, alias_catalog, user_text):
             "assumptions": "OPS = OBP + SLG; grouped by position."
         })},
 
+        # Pitching leaderboard: ERA ascending with an innings qualifier
+        {"role": "user", "content": "lowest ERA in 2024, minimum 150 innings"},
+        {"role": "assistant", "content": json.dumps({
+            "sql": (
+                "SELECT full_name AS name, p_era "
+                "FROM pitching_stats "
+                "WHERE year = 2024 AND p_formatted_ip >= 150 "
+                "ORDER BY p_era ASC LIMIT 10;"
+            ),
+            "x": "name", "y": "p_era", "chart_type": "bar",
+            "assumptions": "ERA: lower is better; qualified by innings pitched."
+        })},
+
         # Bat-tracking mart: leaderboard with a min-swing qualifier
         {"role": "user", "content": "fastest average bat speed in 2025, minimum 100 competitive swings"},
         {"role": "assistant", "content": json.dumps({
@@ -268,7 +327,7 @@ def fewshot_messages(db, catalog, alias_catalog, user_text):
     ]
 
 
-def llm_nl2sql_plan(db, text):
+def llm_nl2sql_plan(db, text, resolved_players=None, forced_stats=None):
     catalog = build_catalog(db)
     alias_catalog = build_alias_catalog(db, catalog)
     client = get_llm_client()
@@ -283,16 +342,46 @@ def llm_nl2sql_plan(db, text):
             "assumptions": "LLM unavailable; default HR leaderboard."
         }
 
+    # Entity preflight results: verified (name, player_id) pairs. Filtering
+    # on these ids replaces fuzzy ILIKE fragments — '%lombard%' matching
+    # Steve Lombardozzi is the failure class this removes.
+    resolved_block = ""
+    if resolved_players:
+        role_notes = {
+            "pitcher": " — PITCHER: answer from pitching_stats",
+            "two_way": " — TWO-WAY player: batting_stats for hitting, "
+                       "pitching_stats for pitching",
+        }
+        lines = [
+            f"- {rp['name']}: player_id = {rp['player_id']}"
+            + (f" (batting data {rp['first_year']}–{rp['last_year']})"
+               if rp.get("first_year") else "")
+            + role_notes.get(rp.get("role") or "", "")
+            for rp in resolved_players
+        ]
+        resolved_block = (
+            "\nRESOLVED PLAYERS (verified against the database — filter on "
+            "player_id, do NOT use ILIKE for these):\n" + "\n".join(lines) + "\n"
+        )
+    if forced_stats:
+        resolved_block += (
+            "\nUSER-SELECTED STATS (clicked in a picker UI — chart EXACTLY "
+            f"these value columns, no substitutes, no extras): "
+            f"{', '.join(forced_stats)}. If a season has no value (e.g. a "
+            "two-way player who didn't pitch that year), return the rows "
+            "that exist rather than switching to different columns.\n"
+        )
+
     # Lightweight hinting: if the prompt contains aliased phrases, surface canonical stats
     tnorm = _normalize_key(text)
-    matched = []
+    matched = list(forced_stats or [])
     for phrase, col in alias_catalog.items():
         if phrase and phrase in tnorm:
             matched.append(col)
     matched = sorted({m for m in matched})
     user_msg = text if not matched else f"{text}\n\n[canonical_stats={','.join(matched)}]"
 
-    all_messages = fewshot_messages(db, catalog, alias_catalog, user_msg)
+    all_messages = fewshot_messages(db, catalog, alias_catalog, user_msg, resolved_block)
     response = client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=1024,
@@ -461,8 +550,11 @@ def y_columns_from(y_key):
     return []
 
 
-def build_summary(chart_type, series, x_key, y_key, prompt_text):
-    """Single-sentence conclusion that considers ALL series (not just the first)."""
+def build_summary(chart_type, series, x_key, y_key, prompt_text, ascending=False):
+    """Single-sentence conclusion that considers ALL series (not just the first).
+
+    `ascending` (from the SQL's ORDER BY) flips the superlative for
+    lower-is-better leaderboards — "lowest ERA", not "highest"."""
     if isinstance(y_key, str):
         stat_slug = y_key
     elif isinstance(y_key, list) and y_key:
@@ -494,9 +586,18 @@ def build_summary(chart_type, series, x_key, y_key, prompt_text):
     series_are_stats = bool(series) and all(
         str(s.get("id")) in stat_ids for s in series
     )
+    superlative = "highest"
     if series_are_stats:
         pool = [r for r in all_pts if str(r["id"]) == str(stat_slug)] or all_pts
-        best = max(pool, key=lambda r: r["y"])
+        # Ascending order on a categorical axis = a lower-is-better
+        # leaderboard (ERA, K%). A year axis stays "highest" — there the
+        # ASC sort is chronology, not ranking.
+        categorical = all(isinstance(r.get("x"), str) for r in pool)
+        if ascending and categorical:
+            best = min(pool, key=lambda r: r["y"])
+            superlative = "lowest"
+        else:
+            best = max(pool, key=lambda r: r["y"])
         names = [str(best.get("x"))]
     else:
         best = max(all_pts, key=lambda r: r["y"])
@@ -514,14 +615,15 @@ def build_summary(chart_type, series, x_key, y_key, prompt_text):
     val_txt = format_number_short(best["y"])
     if len(names) == 1:
         who = names[0]
-        return f"{who} posted the highest {stat_name}{yr_phrase} at {val_txt}."
+        return f"{who} posted the {superlative} {stat_name}{yr_phrase} at {val_txt}."
     else:
-        return f"{', '.join(names)} tied for the highest {stat_name}{yr_phrase} at {val_txt}."
+        return f"{', '.join(names)} tied for the {superlative} {stat_name}{yr_phrase} at {val_txt}."
 
 
 # ----------------------- Execute & shape -----------------------
-def run_nl2sql(db, text):
-    plan = llm_nl2sql_plan(db, text)
+def run_nl2sql(db, text, resolved_players=None, forced_stats=None):
+    plan = llm_nl2sql_plan(db, text, resolved_players=resolved_players,
+                           forced_stats=forced_stats)
 
     sql = str(plan.get("sql") or "").strip()
     if not sql:
@@ -665,6 +767,7 @@ def run_nl2sql(db, text):
         x_key=x_key,
         y_key=y_key,
         prompt_text=text,
+        ascending=parse_order_direction_from_sql(sql) == "asc",
     )
 
     return {

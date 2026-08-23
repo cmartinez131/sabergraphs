@@ -95,3 +95,23 @@ def _init_tables():
     except Exception:
         # Don't crash the app if auto-init fails (e.g., DB not reachable yet).
         logger.warning("[startup] history table init failed", exc_info=True)
+
+    # Career-alignment view (rookie season / season number) used by the
+    # NL->SQL planner and the aligned-compare toolkit. Idempotent; rookie
+    # features degrade gracefully if batting_stats isn't loaded yet.
+    try:
+        from .db.database import engine
+        from .db.season_index import ensure_player_season_index
+        if ensure_player_season_index(engine):
+            logger.info("[startup] player_season_index view ensured.")
+    except Exception:
+        logger.warning("[startup] player_season_index init failed", exc_info=True)
+
+    # Persistent StatsAPI profile cache (position/team/handedness).
+    try:
+        from .db.database import engine
+        from .db.directory import ensure_player_directory
+        ensure_player_directory(engine)
+        logger.info("[startup] player_directory table ensured.")
+    except Exception:
+        logger.warning("[startup] player_directory init failed", exc_info=True)

@@ -117,6 +117,23 @@ STAT_ALIASES = {
     'squared_up_contact': ['squared-up contact', 'squared up contact%'],
     'squared_up_swing': ['squared-up swing', 'squared up swing%'],
     'primary_position': ['position'],
+    # --- pitching vocabulary (pitching_stats table) ---
+    'p_era': ['era', 'earned run average'],
+    'p_win': ['wins', 'pitcher wins', 'win total'],
+    'p_loss': ['losses'],
+    'p_save': ['saves'],
+    'p_blown_save': ['blown saves'],
+    'p_hold': ['holds'],
+    'p_quality_start': ['quality starts', 'quality start'],
+    'p_complete_game': ['complete games'],
+    'p_shutout': ['shutouts'],
+    'p_formatted_ip': ['innings pitched', 'innings', 'ip'],
+    'p_opp_batting_avg': ['opponent batting average', 'batting average against',
+                          'opp avg', 'baa'],
+    'p_opp_on_base_avg': ['opponent obp', 'obp against'],
+    'fastball_avg_speed': ['fastball velocity', 'fastball velo', 'fastball speed',
+                           'average fastball'],
+    'fastball_avg_spin': ['fastball spin', 'fastball spin rate'],
     # --- bat-tracking mart vocabulary (mart_bat_tracking_season /
     #     mart_batter_pitch_season; 2024+ bat-tracking era) ---
     'avg_bat_speed': ['bat speed', 'average bat speed', 'avg bat speed'],

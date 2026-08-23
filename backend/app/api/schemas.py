@@ -30,7 +30,11 @@ SCHEMA_VERSION = "1"
 # Trimmed, non-empty user-supplied identifiers (stat names, column names).
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
-ChartType = Literal["bar", "line", "radar", "facet"]
+# "clarify" is not a chart: it asks the user to resolve an ambiguity
+# (which player / which stats) before a chart can be produced. Additive to
+# the v1 contract — clients that predate it fall through to their default
+# branch and show the narration.
+ChartType = Literal["bar", "line", "radar", "facet", "clarify"]
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +83,30 @@ class RadarRow(BaseModel):
     stat: str
 
 
+class ClarifyOption(BaseModel):
+    """One clickable choice. `value` is the exact hint fragment the client
+    sends back in PromptRequest.hints when this option is chosen."""
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str
+    description: Optional[str] = None
+    value: dict[str, Any] = Field(default_factory=dict)
+
+
+class ClarifyQuestion(BaseModel):
+    """A question the preflight needs answered before charting: which
+    player a mention refers to, or which stats to compare."""
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: Literal["player", "stat"]
+    prompt: str
+    mention: Optional[str] = None       # the text span this disambiguates
+    multi: bool = False                 # stat questions allow multi-select
+    options: list[ClarifyOption] = Field(default_factory=list)
+
+
 class ChartResponse(BaseModel):
     """Canonical payload rendered by the frontend ChartRenderer."""
 
@@ -91,6 +119,8 @@ class ChartResponse(BaseModel):
     meta: Optional[dict[str, Any]] = None
     facets: Optional[list[ChartFacet]] = None
     ai_source: Optional[str] = None
+    # Present only when chart_type == "clarify".
+    clarification: Optional[list[ClarifyQuestion]] = None
     # Populated only by /api/prompt?debug=1 on the agent route.
     plan: Optional[dict[str, Any]] = None
 
@@ -129,8 +159,29 @@ class YearWindow(BaseModel):
         return self
 
 
+class PlayerHint(BaseModel):
+    """Pins one name mention to a resolution, echoing a ClarifyOption.value.
+    player_id -> a chartable local player; statsapi_id/name only -> a real
+    person with no data in the covered window (the graceful-gap path).
+    debut/team ride along so the gap message stays specific."""
+
+    mention: NonEmptyStr
+    player_id: Optional[int] = None
+    statsapi_id: Optional[int] = None
+    name: Optional[str] = None
+    debut: Optional[str] = None
+    team: Optional[str] = None
+
+
+class PromptHints(BaseModel):
+    players: list[PlayerHint] = Field(default_factory=list)
+    stats: list[NonEmptyStr] = Field(default_factory=list)
+
+
 class PromptRequest(BaseModel):
     text: NonEmptyStr
+    # Clarification round-trip: answers to a previous "clarify" response.
+    hints: Optional[PromptHints] = None
 
 
 class CompareRequest(YearWindow):

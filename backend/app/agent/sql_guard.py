@@ -48,10 +48,20 @@ MART_TABLES = frozenset({
 
 ALLOWED_TABLES = frozenset({
     "batting_stats",
+    "pitching_stats",
     "player_profiles",
     "player_features",
     "player_seasons",
+    # Derived career-alignment VIEW (db/season_index.py): season_number /
+    # is_rookie_season / rookie_pre_panel per (player_id, year). A view, so
+    # allowlisting it exposes nothing beyond curated batting_stats columns.
+    "player_season_index",
 }) | MART_TABLES
+
+# Year-grain relations: joins that include one of these must align on year.
+_YEAR_ALIGNED_TABLES = frozenset({
+    "player_features", "player_seasons", "player_season_index",
+})
 
 DEFAULT_MAX_ROWS = 200
 
@@ -422,9 +432,10 @@ def guard_sql(sql, allowed_tables=ALLOWED_TABLES, max_rows=DEFAULT_MAX_ROWS):
     if "join" in pieces and "player_id" not in pieces \
             and "batter_mlbam" not in pieces:
         raise SqlGuardError("Joins must include player_id/batter_mlbam equality.")
-    if {"player_features", "player_seasons"} & set(used_tables) \
-            and "year" not in pieces:
-        raise SqlGuardError("Joins with features/seasons must align on year.")
+    if _YEAR_ALIGNED_TABLES & set(used_tables) \
+            and len(set(used_tables)) > 1 and "year" not in pieces:
+        raise SqlGuardError(
+            "Joins with features/seasons/season-index must align on year.")
     if MART_TABLES & set(used_tables) and len(set(used_tables)) > 1 \
             and "season" not in pieces:
         raise SqlGuardError("Joins with mart tables must align on season.")

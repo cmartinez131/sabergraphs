@@ -95,9 +95,10 @@ async function httpDelete(path) {
 export function health() { return httpGet(`/health`); }
 export function compare(body) { return httpPost(`/api/compare`, body); }
 export function predict(body) { return httpPost(`/api/predict`, body); }
-export function prompt(text, { debug = false } = {}) {
+export function prompt(text, { debug = false, hints = null } = {}) {
   const qs = debug ? "?debug=1" : "";
-  return httpPost(`/api/prompt${qs}`, { text });
+  const body = hints ? { text, hints } : { text };
+  return httpPost(`/api/prompt${qs}`, body);
 }
 
 // ---- History API ----

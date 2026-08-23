@@ -72,6 +72,10 @@ export default function Home() {
   const [chartSummary, setChartSummary] = useState("");
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Clarification round-trip ({ text, questions }) + per-question selections
+  const [clarify, setClarify] = useState(null);
+  const [clarifySel, setClarifySel] = useState({});
   const [, setTheme] = useState(document.documentElement.dataset.theme || "dark");
 
   // Server-backed conversations list
@@ -82,7 +86,7 @@ export default function Home() {
   const chartNodeRef = useRef(null);
   const navigate = useNavigate();
 
-  const active = loading || hasChart;
+  const active = loading || hasChart || !!clarify;
   const loggedIn = false; // wire to real auth later
 
   // ---------- Health check ----------
@@ -234,14 +238,37 @@ export default function Home() {
     }, 800);
   }
 
-  async function callPrompt(text) {
+  async function callPrompt(text, hints = null) {
     setLoading(true);
     setHasChart(false);
     setChartSummary("");
     setFacets(null);
     setMeta({});
+    setClarify(null);
+    setClarifySel({});
     try {
-      const res = await apiPrompt(text);
+      const res = await apiPrompt(text, { hints });
+
+      // The backend needs the user to disambiguate (which player / which
+      // stats) before it can chart — render clickable options instead.
+      // Recommended options (e.g. Home Runs / ERA) arrive pre-selected so
+      // "Generate chart" is one click away.
+      if (res.chart_type === "clarify") {
+        const questions = res.clarification || [];
+        const preSel = {};
+        questions.forEach((q, i) => {
+          if (q.multi) {
+            const rec = (q.options || [])
+              .filter((o) => o.recommended)
+              .map((o) => o.value);
+            if (rec.length) preSel[i] = rec;
+          }
+        });
+        setClarify({ text, questions });
+        setClarifySel(preSel);
+        setChartSummary(res.narration || "");
+        return;
+      }
 
       if (res.chart_type === "facet") {
         setChartType("facet");
@@ -303,8 +330,91 @@ export default function Home() {
     setSidebarOpen(false);
     setFacets(null);
     setMeta({});
+    setClarify(null);
+    setClarifySel({});
     navigate("/");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /* ---------- Clarification round-trip ---------- */
+
+  function toggleClarifyOption(qIdx, option, multi) {
+    setClarifySel((prev) => {
+      const cur = prev[qIdx] || [];
+      let next;
+      if (multi) {
+        const has = cur.some((v) => JSON.stringify(v) === JSON.stringify(option.value));
+        next = has
+          ? cur.filter((v) => JSON.stringify(v) !== JSON.stringify(option.value))
+          : [...cur, option.value];
+      } else {
+        next = [option.value];
+      }
+      return { ...prev, [qIdx]: next };
+    });
+  }
+
+  function clarifyAnswered(sel) {
+    if (!clarify) return false;
+    return clarify.questions.every((_, i) => (sel[i] || []).length > 0);
+  }
+
+  function submitClarify(selOverride = null) {
+    if (!clarify) return;
+    const sel = selOverride || clarifySel;
+    const players = [];
+    const stats = [];
+    clarify.questions.forEach((q, i) => {
+      (sel[i] || []).forEach((v) => {
+        if (q.kind === "stat" && v.stat) stats.push(v.stat);
+        else if (q.kind === "player") players.push(v);
+      });
+    });
+    callPrompt(clarify.text, {
+      players,
+      ...(stats.length ? { stats } : {}),
+    });
+  }
+
+  function pickClarifyOption(qIdx, q, option) {
+    if (q.multi) {
+      toggleClarifyOption(qIdx, option, true);
+      return;
+    }
+    // Single-select: record the choice. Auto-submit ONLY when the whole
+    // card is single-select confirms (a lone "Did you mean X?" resolves in
+    // one click). If any multi-select question is on the card, the
+    // "Generate chart" button is the one and only trigger — clicking a
+    // player name must never fire the query out from under the user.
+    const sel = { ...clarifySel, [qIdx]: [option.value] };
+    setClarifySel(sel);
+    const buttonDriven = clarify.questions.some((qq) => qq.multi);
+    if (
+      !buttonDriven &&
+      clarify.questions.every((_, i) => (sel[i] || []).length > 0)
+    ) {
+      submitClarify(sel);
+    }
+  }
+
+  function groupClarifyOptions(options) {
+    const groups = [];
+    (options || []).forEach((o, oIdx) => {
+      const g = o.group || "";
+      let bucket = groups.find((x) => x.g === g);
+      if (!bucket) {
+        bucket = { g, items: [] };
+        groups.push(bucket);
+      }
+      bucket.items.push({ o, oIdx });
+    });
+    return groups;
+  }
+
+  function isClarifySelected(qIdx, option) {
+    return (clarifySel[qIdx] || []).some(
+      (v) => JSON.stringify(v) === JSON.stringify(option.value)
+    );
   }
 
   function handleFill(text) {
@@ -554,6 +664,71 @@ export default function Home() {
               <div className="chart-content">
                 {loading ? (
                   <ChartSkeleton />
+                ) : clarify ? (
+                  <div className="clarify-card">
+                    <div className="clarify-heading">
+                      {chartSummary || "Quick check before I chart this…"}
+                    </div>
+                    {clarify.questions.map((q, qIdx) => (
+                      <div key={qIdx} className="clarify-question">
+                        <div className="clarify-prompt">{q.prompt}</div>
+                        {groupClarifyOptions(q.options).map(({ g, items }) => (
+                          <div key={g || "all"} className="chip-subgroup">
+                            {g && <div className="chip-group-label">{g}</div>}
+                            <div className="chips">
+                              {items.map(({ o, oIdx }) => (
+                                <button
+                                  key={oIdx}
+                                  type="button"
+                                  className={
+                                    "chip" +
+                                    (isClarifySelected(qIdx, o) ? " selected" : "")
+                                  }
+                                  onClick={() => pickClarifyOption(qIdx, q, o)}
+                                >
+                                  <span className="chip-label">{o.label}</span>
+                                  {o.description && (
+                                    <span className="chip-desc"> · {o.description}</span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {clarify.questions.some((q) => q.multi) && (
+                      <div className="clarify-actions">
+                        <button
+                          type="button"
+                          className="btn primary"
+                          disabled={!clarifyAnswered(clarifySel)}
+                          onClick={() => submitClarify()}
+                        >
+                          Generate chart
+                        </button>
+                        {!clarifyAnswered(clarifySel) && (
+                          <span className="clarify-hint">
+                            Pick an option for each question above to continue.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : hasChart &&
+                  !facets &&
+                  (series || []).length > 0 &&
+                  (series || []).every(
+                    (s) => Array.isArray(s?.data) && s.data.length === 0
+                  ) ? (
+                  // Nothing plottable (e.g. every named player was censored
+                  // or has no data) — show the explanation, not empty axes.
+                  <div className="clarify-card">
+                    <div className="clarify-heading">Nothing to chart for this one</div>
+                    <div className="clarify-prompt">
+                      {chartSummary || "No data matched this question."}
+                    </div>
+                  </div>
                 ) : hasChart ? (
                   <>
                     <div ref={chartNodeRef}>
