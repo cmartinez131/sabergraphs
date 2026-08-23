@@ -76,7 +76,6 @@ export default function Home() {
   // Clarification round-trip ({ text, questions }) + per-question selections
   const [clarify, setClarify] = useState(null);
   const [clarifySel, setClarifySel] = useState({});
-  const [, setTheme] = useState(document.documentElement.dataset.theme || "dark");
 
   // Server-backed conversations list
   const [conversations, setConversations] = useState([]);
@@ -128,80 +127,38 @@ export default function Home() {
     loadRecent();
   }, []);
 
-  // Follow OS theme changes if user hasn't manually chosen
-  useEffect(() => {
-    if (localStorage.getItem("theme")) return;
-    if (!window.matchMedia) return;
-    const mql = window.matchMedia("(prefers-color-scheme: light)");
-    const onChange = (e) => {
-      const next = e.matches ? "light" : "dark";
-      document.documentElement.dataset.theme = next;
-      setTheme(next);
-    };
-    try {
-      mql.addEventListener("change", onChange);
-      return () => mql.removeEventListener("change", onChange);
-    } catch {
-      mql.addListener(onChange);
-      return () => mql.removeListener(onChange);
-    }
-  }, []);
-
+  // Three curated examples per category: one classic, one that shows off a
+  // newer surface (pitching, rookie alignment, bat tracking), one range.
   const promptGroups = useMemo(
     () => ({
-      "Compare players": [
+      "Player comparisons": [
         "Judge vs Soto home runs in 2025",
-        "Trout vs Harper batting average in 2019",
-        "Compare Acuña, Soto, and Betts on singles, doubles, triples, and HR in 2025",
-        "Compare Carroll, Witt Jr., and Tatis Jr. sprint speed in 2024",
-        "Compare Lindor and Marte on steals from 2020 to 2025",
-        "Stanton and Soto slugging % from 2021 to 2025",
-        // "luisangel acuna and ronald acuna jr slugging % from 2022 to 2025",
+        "Compare Volpe and Judge home runs in their rookie seasons",
+        "Skubal vs Skenes ERA in 2025",
       ],
-      "Get stat leaderboards and rankings": [
-        "Hit by pitch leaders 2017–2019 (sum)",
-        "top 5 players in home runs in 2025",
-        "Top 10 barrel% in 2022",
-        "Lowest 10 K% in 2023",
-        "bottom 10 strikeout % in 2023",
-        "leader in single season slugging percentage from 2020 to 2025",
-        "top 12 stolen bases totals between 2024 and 2025",
-        "top 8 OPS average from 2022 to 2024",
-        "Top 5 Home Run leaders 2020–2025 (average per year)",
-        "Home run leaders 2020–2025 (sum)"
+      "Stat leaderboards and rankings": [
+        "Top 5 players in home runs in 2025",
+        "Lowest ERA in 2024, minimum 150 innings",
+        "Fastest average bat speed in 2025, minimum 100 competitive swings",
       ],
-      "Analyze player trends": [
-        "Rendon batting average from 2015 to 2025",
-        "strikeout percentage by season for giancarlo stanton 2019 - 2023",
-        "Stanton slugging % from 2022 to 2025",
-        "bregman home runs 2015 to 2025",
-        "Judge whiff % 2018 to 2025",
+      "Player trends": [
         "Mookie Betts batting average from 2016 to 2025",
-        "Kris Bryant batting average from 2016 to 2025",
+        "Kershaw ERA by season from 2015 to 2025",
+        "Judge whiff % from 2018 to 2025",
       ],
-      "Project future stats": [
+      "Future stat projections": [
         "Forecast Aaron Judge OPS for the next 6 years",
         "Estimate Shohei Ohtani HR for the next 3 years",
-        "Forecast Juan Soto SLG for the next 3 years",
         "Project Elly De La Cruz stolen bases over the next 4 years",
-        "Over the next 5 years, project Julio Rodríguez HR",
       ],
-      "Look up a single stat": [
+      "Single stat lookups": [
         "Shohei Ohtani OPS in 2024",
-        "Mookie Betts whiff percentage in 2020",
-        "Soto Steals in 2025",
-        "Most RBIs in 2019",
+        "Paul Skenes ERA in 2024",
+        "Soto steals in 2025",
       ],
     }),
     []
   );
-
-  function toggleTheme() {
-    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem("theme", next);
-    setTheme(next);
-  }
 
   function runDemo() {
     setLoading(true);
@@ -250,7 +207,7 @@ export default function Home() {
       const res = await apiPrompt(text, { hints });
 
       // The backend needs the user to disambiguate (which player / which
-      // stats) before it can chart — render clickable options instead.
+      // stats) before it can chart, so render clickable options instead.
       // Recommended options (e.g. Home Runs / ERA) arrive pre-selected so
       // "Generate chart" is one click away.
       if (res.chart_type === "clarify") {
@@ -384,7 +341,7 @@ export default function Home() {
     // Single-select: record the choice. Auto-submit ONLY when the whole
     // card is single-select confirms (a lone "Did you mean X?" resolves in
     // one click). If any multi-select question is on the card, the
-    // "Generate chart" button is the one and only trigger — clicking a
+    // "Generate chart" button is the one and only trigger; clicking a
     // player name must never fire the query out from under the user.
     const sel = { ...clarifySel, [qIdx]: [option.value] };
     setClarifySel(sel);
@@ -548,7 +505,6 @@ export default function Home() {
 
       {/* Navbar */}
       <NavBar
-        onToggleTheme={toggleTheme}
         onOpenSidebar={() => {
           setSidebarOpen(true);
           loadRecent();
@@ -563,7 +519,7 @@ export default function Home() {
             <h1>
               Ask baseball questions.
               <br />
-              <span className="accent">See data. Get insights.</span>
+              <span className="accent">See data and get insights.</span>
             </h1>
             {/* <p className="sub">Natural language → analytics, projections, and beautiful charts.</p> */}
 
@@ -599,7 +555,17 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="gs-foot muted">
-                  Stats supported: AB, PA, H, 1B/2B/3B, HR, SO, BB, K%, BB%, AVG, SLG, OBP, OPS, RBI, HBP, GIDP, called & swinging strikes, and more.
+                  <div>
+                    <b>Batter stats:</b> AVG, HR, OPS, wOBA, SLG, OBP, RBI, SB,
+                    K%, BB%, barrel %, exit velocity, sprint speed, bat speed
+                    (2024+), and more.
+                  </div>
+                  <div>
+                    <b>Pitcher stats:</b> ERA, wins, saves, strikeouts, innings
+                    pitched, quality starts, opponent AVG, fastball velocity,
+                    and more.
+                  </div>
+                  <div className="gs-soon">Coming soon: pitch level stats.</div>
                 </div>
               </div>
 
@@ -614,7 +580,7 @@ export default function Home() {
                   </div>
                   <div className="row"><span>Database</span><StatusPill label="Running" state="ok" /></div>
                   <p className="muted status-footnote">
-                    *Only 2015-2025 batter data available
+                    *Batter and pitcher data, 2015-2025 seasons
                   </p>
                 </div>
               </div>
@@ -632,6 +598,7 @@ export default function Home() {
               <button className="btn primary" type="submit">Ask</button>
             </form>
 
+            <h2 className="chips-heading">Try asking</h2>
             <div className="chip-groups">
               {Object.entries(promptGroups).map(([group, prompts]) => (
                 <div key={group} className="chip-group">
@@ -722,7 +689,7 @@ export default function Home() {
                     (s) => Array.isArray(s?.data) && s.data.length === 0
                   ) ? (
                   // Nothing plottable (e.g. every named player was censored
-                  // or has no data) — show the explanation, not empty axes.
+                  // or has no data): show the explanation, not empty axes.
                   <div className="clarify-card">
                     <div className="clarify-heading">Nothing to chart for this one</div>
                     <div className="clarify-prompt">

@@ -67,9 +67,6 @@ body {
 
 /* Selection & Scrollbar */
 ::selection { background: rgba(121,246,255,0.32); color: var(--text); }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: linear-gradient(180deg, rgba(121,246,255,0.45), rgba(155,135,255,0.45)); border-radius: 12px; }
-::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
 
 /* ---------- Background decor (kept minimal) ---------- */
 .bg { position: fixed; inset: 0; overflow: hidden; z-index: 0; }
@@ -267,7 +264,7 @@ body {
 .chip:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(121,246,255,0.2); }
 
 /* ---------- Buttons ---------- */
-.btn { display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--stroke); color: var(--text); background: rgba(255,255,255,0.07); cursor: pointer; user-select: none; transition: transform .08s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease; }
+.btn { font: inherit; display: inline-flex; align-items: center; justify-content: center; height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--stroke); color: var(--text); background: rgba(255,255,255,0.07); cursor: pointer; user-select: none; transition: transform .08s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease; }
 /* NEW: ensure Link elements styled as .btn never underline */
 .btn:link, .btn:visited { text-decoration: none; }
 
@@ -423,7 +420,7 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, .chip:focu
   --stroke: rgba(10,20,40,0.16);
 
   --text: #0d1220;
-  --muted: #5a6785;
+  --muted: #4d5a78;
 
   --accent: #2ac9d9;
   --accent-2: #7c6cff;
@@ -661,3 +658,31 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, .chip:focu
 .btn[disabled], .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
 .chip-subgroup { margin-top: 6px; }
 .chip-group-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted, #9aa4b2); margin: 8px 0 2px; }
+
+/* "How a question becomes a chart": numbered step grid (Product spec) */
+.arch-diagram { margin-top: 10px; }
+.arch-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.arch-node { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; border: 1px solid var(--stroke); border-radius: 12px; background: rgba(255,255,255,0.06); }
+.arch-node b { font-size: 13px; }
+.arch-node > span:last-child { font-size: 11.5px; color: var(--muted, #9aa4b2); line-height: 1.4; }
+.arch-step { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 999px; border: 1px solid var(--stroke); background: rgba(121,246,255,0.12); font-size: 11px; font-weight: 700; margin-bottom: 3px; }
+.gs-foot > div { margin-top: 4px; }
+.gs-soon { font-style: italic; opacity: 0.85; }
+@media (max-width: 860px) {
+  .arch-flow { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 520px) {
+  .arch-flow { grid-template-columns: 1fr; }
+}
+
+/* Product spec: paragraph copy matches the 14px feature lists */
+.pricing .glass p { font-size: 14px; color: var(--text); line-height: 1.6; }
+
+/* Example-question groups under the ask bar */
+.chips-heading { margin: 28px 0 0; font-size: 18px; font-weight: 700; }
+.chip-groups { margin-top: 4px; }
+.chip-group { margin-top: 20px; }
+.chip-group-title { font-size: 14px; font-weight: 600; }
+
+/* Course lists under each degree: readable, not a footnote */
+.feature-list .muted { font-size: 13.5px; }
